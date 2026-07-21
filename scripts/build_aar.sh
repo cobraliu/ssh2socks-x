@@ -6,6 +6,14 @@
 #
 set -euo pipefail
 
+# This module lives in a monorepo whose root has a go.work listing ./core and
+# ./desktop — but NOT ./mobile. gomobile/gobind would otherwise load `mobile`
+# in workspace mode and fail with "no exported names in the package". Disable
+# the workspace (mobile resolves core via its own `replace` directive) and
+# clear any inherited GOFLAGS=-mod=mod that conflicts with module mode.
+export GOWORK=off
+export GOFLAGS=
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # android/
 mobile_dir="$here/mobile"
 app_libs="$here/app/android/app/libs"
