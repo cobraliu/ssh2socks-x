@@ -26,9 +26,13 @@ jobs:
             goos: linux
             artifact: ssh2socks-desktop-linux-amd64
             bin: ssh2socks-desktop
-          - os: macos-latest
+          - os: macos-14          # Apple Silicon runner → native arm64
             goos: darwin
             artifact: ssh2socks-desktop-macos-arm64
+            bin: ssh2socks-desktop
+          - os: macos-13          # Intel runner → native amd64
+            goos: darwin
+            artifact: ssh2socks-desktop-macos-amd64
             bin: ssh2socks-desktop
           - os: windows-latest
             goos: windows
@@ -42,9 +46,12 @@ jobs:
         with:
           go-version: "1.26.3"
 
-      - name: Linux GL/X11 dev headers
+      - name: Linux GL/X11/Wayland dev headers
         if: matrix.goos == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Build
         working-directory: desktop
