@@ -1,0 +1,85 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to publish a Release on tag
+    env:
+      FLUTTER_VERSION: "3.24.5"
+      NDK_VERSION: "26.1.10909125"
+      # Release signing — set these in repo Settings → Secrets → Actions.
+      # If absent, the release build falls back to debug signing.
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + platform
+        run: |
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Build Go core .aar (gomobile)
+        run: bash scripts/build_aar.sh
+
+      - name: Assemble Flutter host project (overlay our sources + patch gradle)
+        run: bash scripts/ci_assemble.sh
+
+      - name: Verify .aar survived assembly
+        run: |
+          test -f app/android/app/libs/mobile.aar || \
+            { echo "mobile.aar missing after assembly"; exit 1; }
+
+      - name: Flutter build APK
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh2socks-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Rename APK for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cp app/build/app/outputs/flutter-apk/app-release.apk "ssh2socks-${GITHUB_REF_NAME}.apk"
+
+      - name: Publish GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ssh2socks-${{ github.ref_name }}.apk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
