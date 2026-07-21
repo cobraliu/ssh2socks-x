@@ -1,0 +1,21 @@
+name: ssh2socks
+description: SSH → SOCKS proxy over VpnService (Flutter UI + Go core)
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.2.0
+  flutter_secure_storage: ^9.0.0
+  file_picker: ^8.0.0
+  device_apps: ^2.2.0
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

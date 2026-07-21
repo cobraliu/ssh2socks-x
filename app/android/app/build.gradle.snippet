@@ -1,0 +1,31 @@
+// ─────────────────────────────────────────────────────────────────────────
+// MERGE THESE BITS into the android/app/build.gradle that `flutter create`
+// generates. They are shown as a snippet (not a full file) so they layer on
+// top of the Flutter Gradle plugin boilerplate rather than replacing it.
+// ─────────────────────────────────────────────────────────────────────────
+
+android {
+    namespace = "com.ssh2socks.app"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.ssh2socks.app"
+        minSdk = 24        // VpnService per-app rules + modern APIs
+        targetSdk = 34
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // The gomobile-produced archive: android/mobile/build/mobile.aar
+    // (see scripts/build_aar.sh). Copied into app/libs/ by that script.
+    implementation(files("libs/mobile.aar"))
+    implementation("androidx.core:core-ktx:1.13.1")
+}

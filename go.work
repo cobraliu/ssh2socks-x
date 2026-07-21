@@ -1,0 +1,10 @@
+go 1.26.3
+
+// Dev-time workspace for the two pure-Go, offline-buildable modules.
+// `mobile` is intentionally excluded: it pulls tun2socks and only builds inside
+// the gomobile/NDK toolchain, where build_aar.sh sets GOWORK=off and relies on
+// its own `replace ssh2socks.local/core => ../core` directive.
+use (
+	./core
+	./desktop
+)
