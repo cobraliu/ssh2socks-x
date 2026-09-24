@@ -1,0 +1,134 @@
+name: ci
+
+# check  : fmt + clippy + tests (Linux)
+# build  : Windows / macOS (universal) / Linux bundles, uploaded as artifacts
+# release: on a v* tag, attach every bundle to a GitHub Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: fmt
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            rust_targets: ""
+            args: "--bundles nsis,msi"
+            out: src-tauri/target/release
+          - name: macos-universal
+            os: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: "--target universal-apple-darwin --bundles app,dmg"
+            out: src-tauri/target/universal-apple-darwin/release
+          - name: linux-x64
+            os: ubuntu-22.04
+            rust_targets: ""
+            args: "--bundles deb,rpm,appimage"
+            out: src-tauri/target/release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npx tauri build ${{ matrix.args }}
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="${{ matrix.out }}"
+          ver=$(node -p "require('./package.json').version")
+          case "${{ runner.os }}" in
+            Windows)
+              cp "$out"/bundle/nsis/*.exe dist/
+              cp "$out"/bundle/msi/*.msi dist/
+              cp "$out/ssh2socks.exe" "dist/ssh2socks_${ver}_windows_x64_portable.exe"
+              ;;
+            macOS)
+              cp "$out"/bundle/dmg/*.dmg dist/
+              (cd "$out/bundle/macos" && zip -qry "$GITHUB_WORKSPACE/dist/ssh2socks_${ver}_macos_universal.app.zip" ssh2socks.app)
+              ;;
+            Linux)
+              cp "$out"/bundle/deb/*.deb dist/
+              cp "$out"/bundle/rpm/*.rpm dist/
+              cp "$out"/bundle/appimage/*.AppImage dist/
+              cp "$out/ssh2socks" "dist/ssh2socks_${ver}_linux_x64"
+              ;;
+          esac
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssh2socks-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

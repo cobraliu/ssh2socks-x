@@ -1,46 +1,8 @@
-# The Flutter host project is generated in CI by scripts/ci_assemble.sh.
-# We commit ONLY hand-maintained sources; everything below is generated.
-
-# Dart / Flutter
-app/.dart_tool/
-app/.flutter-plugins
-app/.flutter-plugins-dependencies
-app/.packages
-app/build/
-app/pubspec.lock
-
-# Generated Gradle / Android host files (we keep build.gradle.snippet instead)
-app/android/.gradle/
-app/android/local.properties
-app/android/gradlew
-app/android/gradlew.bat
-app/android/gradle/
-app/android/settings.gradle
-app/android/build.gradle
-app/android/gradle.properties
-app/android/app/build.gradle
-app/android/app/build.gradle.kts
-app/android/app/libs/*.aar
-app/android/app/src/debug/
-app/android/app/src/profile/
-app/android/app/src/main/res/
-
-# Signing secrets (materialized in CI from GitHub secrets; never commit)
-app/android/key.properties
-app/android/app/release.keystore
-*.keystore
-*.jks
-
-# Go
-*.test
-
-# Misc
+node_modules/
+src-tauri/target/
+src-tauri/gen/
 .DS_Store
-
-# Desktop (Fyne) build outputs
-/desktop/ssh2socks-desktop
-/desktop/ssh2socks-desktop.exe
-/desktop/ssh2socks-desktop-*
-desktop/*.app/
-desktop/*.tar.xz
-desktop/fyne-cross/
+Thumbs.db
+.idea/
+.vscode/
+*.log

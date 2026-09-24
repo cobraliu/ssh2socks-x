@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ssh2socks</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="logo">S5</span>
+      <div>
+        <h1>ssh2socks</h1>
+        <p class="sub">SSH → SOCKS5 代理管理</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="start-all" class="btn">全部启动</button>
+      <button id="stop-all" class="btn">全部停止</button>
+      <button id="add" class="btn primary">＋ 新建隧道</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel list-panel">
+      <div class="thead row">
+        <span>状态</span><span>名称</span><span>Host</span><span>本地代理</span><span>连通</span><span class="right">操作</span>
+      </div>
+      <div id="list" class="tbody"></div>
+      <div id="empty" class="empty" hidden>
+        <p>还没有隧道</p>
+        <p class="muted">点击右上角「新建隧道」，从 <code>~/.ssh/config</code> 中选择一个连接。</p>
+      </div>
+    </section>
+
+    <section class="panel log-panel">
+      <div class="log-head">
+        <span>日志</span><span id="log-title" class="muted"></span>
+      </div>
+      <pre id="log" class="log"><span class="muted">选择上方隧道查看其 ssh 日志…</span></pre>
+    </section>
+  </main>
+
+  <dialog id="editor">
+    <form id="editor-form" method="dialog">
+      <h2 id="editor-title">新建隧道</h2>
+      <label class="field-label" for="search">选择 <code>~/.ssh/config</code> 中的连接</label>
+      <input id="search" type="search" placeholder="搜索名称或 IP / 主机名…" autocomplete="off" />
+      <ul id="hosts" class="hosts" role="listbox"></ul>
+      <div class="grid">
+        <label for="name">名称</label>
+        <input id="name" autocomplete="off" />
+        <label for="port">本地 SOCKS 端口</label>
+        <input id="port" type="number" min="1" max="65535" />
+        <label for="probe">探测地址</label>
+        <input id="probe" autocomplete="off" />
+        <span></span>
+        <label class="check"><input id="auto" type="checkbox" /> 进程退出时自动重连</label>
+      </div>
+      <p id="editor-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="editor-cancel" class="btn">取消</button>
+        <button type="submit" class="btn primary">确定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm">
+    <form method="dialog">
+      <h2>删除隧道</h2>
+      <p id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">取消</button>
+        <button value="ok" class="btn danger">删除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

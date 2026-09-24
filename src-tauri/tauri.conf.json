@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ssh2socks",
+  "version": "0.2.0",
+  "identifier": "io.github.cobraliu.ssh2socks",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "ssh2socks — SSH 转 SOCKS 代理",
+        "width": 920,
+        "height": 620,
+        "minWidth": 640,
+        "minHeight": 440
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "SSH 转 SOCKS5 代理管理器",
+    "longDescription": "基于系统 ssh -D 的 SOCKS5 代理可视化管理工具，支持多隧道、自动重连与连通性检测。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
+    },
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": { "depends": ["openssh-client"] }
+    }
+  }
+}
