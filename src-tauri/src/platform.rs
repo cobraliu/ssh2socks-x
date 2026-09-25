@@ -158,3 +158,25 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     std::thread::spawn(move || child.wait());
     Ok(())
 }
+
+/// Open a text file in a plain text editor.
+pub fn open_in_editor(path: &std::path::Path) -> std::io::Result<()> {
+    let mut cmd = if cfg!(windows) {
+        // `config` has no extension, so the shell would ask which app to use.
+        std::process::Command::new("notepad.exe")
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg("-t");
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    let mut child = cmd
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}

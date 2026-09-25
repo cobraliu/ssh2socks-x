@@ -16,7 +16,7 @@ pub struct HostEntry {
     pub hostname: String,
 }
 
-fn ssh_dir() -> Option<PathBuf> {
+pub(crate) fn ssh_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".ssh"))
 }
 
@@ -96,7 +96,7 @@ fn collect_lines(
 }
 
 /// Split `Keyword value`, `Keyword=value` or `Keyword = value`.
-fn split_keyword(line: &str) -> (String, String) {
+pub(crate) fn split_keyword(line: &str) -> (String, String) {
     let end = line
         .find(|c: char| c.is_whitespace() || c == '=')
         .unwrap_or(line.len());
@@ -105,7 +105,7 @@ fn split_keyword(line: &str) -> (String, String) {
     (keyword, rest.trim().to_string())
 }
 
-fn expand_include(token: &str, base: &Path) -> Vec<PathBuf> {
+pub(crate) fn expand_include(token: &str, base: &Path) -> Vec<PathBuf> {
     let expanded = match token
         .strip_prefix("~/")
         .or_else(|| token.strip_prefix("~\\"))

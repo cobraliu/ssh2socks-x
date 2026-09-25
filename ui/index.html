@@ -15,14 +15,19 @@
         <p class="sub">SSH 代理与端口转发</p>
       </div>
     </div>
-    <div class="actions">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-view="tunnels" role="tab">隧道</button>
+      <button class="tab" data-view="config" role="tab">SSH 配置</button>
+      <button class="tab" data-view="keys" role="tab">密钥</button>
+    </nav>
+    <div class="actions" id="tunnel-actions">
       <button id="start-all" class="btn">全部启动</button>
       <button id="stop-all" class="btn">全部停止</button>
       <button id="add" class="btn primary">＋ 新建隧道</button>
     </div>
   </header>
 
-  <main>
+  <main id="view-tunnels" class="view tunnels">
     <section class="panel list-panel">
       <div class="thead row">
         <span>状态</span><span>名称</span><span>Host</span><span>映射</span><span>连通</span><span class="right">操作</span>
@@ -39,6 +44,88 @@
         <span>日志</span><span id="log-title" class="muted"></span>
       </div>
       <pre id="log" class="log"><span class="muted">选择上方隧道查看其 ssh 日志…</span></pre>
+    </section>
+  </main>
+
+  <main id="view-config" class="view config" hidden>
+    <section class="panel side">
+      <div class="side-head">
+        <input id="host-filter" type="search" placeholder="搜索主机…" autocomplete="off" />
+        <button id="host-add" class="btn primary small">＋ 添加</button>
+      </div>
+      <ul id="host-blocks" class="blocks"></ul>
+      <div class="side-foot">
+        <span id="config-path" class="muted mono"></span>
+        <button id="config-open" class="btn small">用编辑器打开</button>
+      </div>
+    </section>
+    <section class="panel form-panel">
+      <form id="host-form" class="host-form" hidden>
+        <h2 id="host-form-title">新建主机</h2>
+        <p id="host-form-where" class="muted where"></p>
+        <div class="grid wide">
+          <label for="h-patterns">别名 Host</label>
+          <input id="h-patterns" autocomplete="off" placeholder="例如 web，多个别名用空格分隔" />
+          <label for="h-hostname">地址 HostName</label>
+          <input id="h-hostname" autocomplete="off" placeholder="IP 或域名" />
+          <label for="h-user">用户 User</label>
+          <input id="h-user" autocomplete="off" placeholder="留空使用当前用户名" />
+          <label for="h-port">端口 Port</label>
+          <input id="h-port" type="number" min="1" max="65535" placeholder="22" />
+          <label for="h-identity">密钥 IdentityFile</label>
+          <input id="h-identity" list="key-options" autocomplete="off" placeholder="留空使用默认密钥（~/.ssh/id_*）" />
+          <span class="label">连接方式</span>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="via" value="direct" /> 直连</label>
+            <label><input type="radio" name="via" value="jump" /> 跳板机 ProxyJump</label>
+            <label><input type="radio" name="via" value="command" /> ProxyCommand</label>
+          </div>
+          <label for="h-jump" data-via="jump">跳板机</label>
+          <input id="h-jump" data-via="jump" list="host-options" autocomplete="off" placeholder="跳板主机的别名，或 user@host:port" />
+          <label for="h-command" data-via="command">ProxyCommand</label>
+          <div data-via="command">
+            <textarea id="h-command" rows="2" class="mono" spellcheck="false" placeholder="例如 ssh -W %h:%p 跳板机"></textarea>
+            <div class="templates">
+              <span class="muted">模板：</span>
+              <button type="button" class="btn small" data-tpl="ssh -W %h:%p 跳板机别名">经跳板机</button>
+              <button type="button" class="btn small" data-tpl="nc -X 5 -x 127.0.0.1:1080 %h %p">经 SOCKS5 代理</button>
+              <button type="button" class="btn small" data-tpl="nc -X connect -x 127.0.0.1:8080 %h %p">经 HTTP 代理</button>
+              <button type="button" class="btn small" data-tpl="ncat --proxy 127.0.0.1:1080 --proxy-type socks5 %h %p">ncat（Windows）</button>
+            </div>
+            <p class="help">%h、%p 会被替换成目标地址和端口。Windows 自带的 OpenSSH 没有 nc，请使用「经跳板机」或安装 Nmap 附带的 ncat。</p>
+          </div>
+          <span class="label" data-others>其它选项</span>
+          <pre id="h-others" class="others mono" data-others></pre>
+        </div>
+        <p id="host-error" class="error" hidden></p>
+        <div class="form-actions">
+          <button type="button" id="host-test" class="btn">测试连接</button>
+          <button type="button" id="host-delete" class="btn danger">删除</button>
+          <span class="spacer"></span>
+          <button type="button" id="host-reset" class="btn">撤销修改</button>
+          <button type="submit" class="btn primary">保存</button>
+        </div>
+        <pre id="host-test-out" class="test-out" hidden></pre>
+      </form>
+      <div id="host-empty" class="empty">
+        <p>选择左侧的主机进行编辑</p>
+        <p class="muted">或点击「添加」新建一个。保存前会把原文件备份为 <code>config.ssh2socks.bak</code>。</p>
+      </div>
+    </section>
+    <datalist id="key-options"></datalist>
+    <datalist id="host-options"></datalist>
+  </main>
+
+  <main id="view-keys" class="view keys" hidden>
+    <section class="panel">
+      <div class="thead row key-row">
+        <span>名称</span><span>类型</span><span>指纹</span><span>注释</span><span class="right">操作</span>
+      </div>
+      <div id="key-list" class="tbody"></div>
+      <div id="key-empty" class="empty" hidden>
+        <p>没有找到公钥（<code>~/.ssh/*.pub</code>）</p>
+        <p class="muted">可以在终端运行 <code>ssh-keygen -t ed25519</code> 生成一对密钥。</p>
+      </div>
     </section>
   </main>
 
@@ -80,11 +167,24 @@
 
   <dialog id="confirm">
     <form method="dialog">
-      <h2>删除隧道</h2>
+      <h2 id="confirm-title"></h2>
       <p id="confirm-text"></p>
       <div class="dialog-actions">
         <button value="cancel" class="btn">取消</button>
-        <button value="ok" class="btn danger">删除</button>
+        <button value="ok" id="confirm-ok" class="btn danger"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="key-dialog">
+    <form method="dialog">
+      <h2 id="key-title"></h2>
+      <p id="key-meta" class="muted mono small-text"></p>
+      <textarea id="key-text" class="mono key-text" rows="5" readonly spellcheck="false"></textarea>
+      <p class="help">把这行公钥追加到服务器的 <code>~/.ssh/authorized_keys</code>，即可免密登录。</p>
+      <div class="dialog-actions">
+        <button value="close" class="btn">关闭</button>
+        <button type="button" id="key-copy" class="btn primary">复制公钥</button>
       </div>
     </form>
   </dialog>

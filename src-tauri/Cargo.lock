@@ -2961,8 +2961,9 @@ dependencies = [
 
 [[package]]
 name = "ssh2socks"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "codepage",
  "dirs",
@@ -2970,6 +2971,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tokio",

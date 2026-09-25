@@ -337,20 +337,314 @@ async function submitEditor() {
   await reload();
 }
 
-// ---- delete confirmation ---------------------------------------------------
-function confirmDelete(view) {
+// ---- confirmation ------------------------------------------------------------
+function ask(title, text, okLabel) {
   const dialog = $("confirm");
-  $("confirm-text").textContent = `确定删除「${view.name}」吗？运行中的隧道会被立即断开。`;
+  $("confirm-title").textContent = title;
+  $("confirm-text").textContent = text;
+  $("confirm-ok").textContent = okLabel;
   dialog.returnValue = "";
-  dialog.onclose = async () => {
-    if (dialog.returnValue !== "ok") return;
-    await call("delete_tunnel", { id: view.id });
-    await reload();
+  return new Promise((resolve) => {
+    dialog.onclose = () => resolve(dialog.returnValue === "ok");
+    dialog.showModal();
+  });
+}
+
+async function confirmDelete(view) {
+  if (!(await ask("删除隧道", `确定删除「${view.name}」吗？运行中的隧道会被立即断开。`, "删除"))) return;
+  await call("delete_tunnel", { id: view.id });
+  await reload();
+}
+
+// ---- tabs ----------------------------------------------------------------------
+let currentView = "tunnels";
+
+async function showView(name) {
+  if (name === currentView) return;
+  if (currentView === "config" && hostDirty && !(await ask("放弃修改", "当前主机的修改还没有保存，确定离开吗？", "放弃修改"))) return;
+  if (currentView === "config") hostDirty = false;
+  currentView = name;
+  for (const tab of document.querySelectorAll(".tab")) tab.classList.toggle("active", tab.dataset.view === name);
+  for (const v of ["tunnels", "config", "keys"]) $(`view-${v}`).hidden = v !== name;
+  $("tunnel-actions").hidden = name !== "tunnels";
+  if (name === "config") loadConfig();
+  if (name === "keys") loadKeys();
+}
+
+// ---- clipboard -----------------------------------------------------------------
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older WebKitGTK: fall back to a hidden textarea. It must live inside
+    // an open modal dialog, since everything outside it is inert.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.cssText = "position:fixed;opacity:0;left:0;top:0;";
+    (document.querySelector("dialog[open]") ?? document.body).append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
+
+async function copyKey(key) {
+  toast((await copyText(key.public_key)) ? `已复制 ${key.name} 的公钥` : "复制失败，请手动选中复制");
+}
+
+// ---- keys view -----------------------------------------------------------------
+let keys = [];
+
+async function loadKeys() {
+  keys = await call("list_keys");
+  const list = $("key-list");
+  list.replaceChildren();
+  for (const key of keys) {
+    const row = el("div", "row key-row");
+    const view = el("button", "btn small", "查看");
+    const copy = el("button", "btn small primary", "复制公钥");
+    view.addEventListener("click", () => showKey(key));
+    copy.addEventListener("click", () => copyKey(key));
+    const ops = el("span", "ops");
+    ops.append(view, copy);
+    const fp = el("span", "cell mono", key.fingerprint);
+    fp.title = key.fingerprint;
+    const comment = el("span", "cell muted", key.comment || "—");
+    comment.title = key.comment;
+    row.append(el("span", "cell", key.name), el("span", "cell mono", key.kind.replace(/^ssh-/, "")), fp, comment, ops);
+    row.addEventListener("dblclick", () => showKey(key));
+    list.append(row);
+  }
+  $("key-empty").hidden = keys.length > 0;
+}
+
+let shownKey = null;
+function showKey(key) {
+  shownKey = key;
+  $("key-title").textContent = `${key.name}.pub`;
+  $("key-meta").textContent = `${key.kind} · ${key.fingerprint}`;
+  $("key-text").value = key.public_key;
+  $("key-dialog").showModal();
+  $("key-text").select();
+}
+
+// ---- ssh config view -----------------------------------------------------------
+let blocks = [];
+let configPath = "";
+let selectedBlock = null; // HostBlock being edited, or null for a new one
+let hostDirty = false;
+
+const blockKey = (b) => `${b.file}\n${b.line}`;
+const sshDir = () => configPath.replace(/[\\/]config$/, "");
+const concreteAliases = (patterns) => patterns.split(/\s+/).filter((a) => a && !/[*?!]/.test(a));
+
+function whereOf(b) {
+  const dir = sshDir();
+  const file = b.file === configPath ? "config" : b.file.startsWith(dir) ? b.file.slice(dir.length + 1) : b.file;
+  return `~/.ssh/${file.replace(/\\/g, "/")} 第 ${b.line + 1} 行`;
+}
+
+async function loadConfig(select) {
+  const view = await call("list_ssh_hosts");
+  blocks = view.blocks;
+  configPath = view.path;
+  $("config-path").textContent = configPath;
+  $("config-path").title = configPath;
+  const [keyList] = await Promise.all([call("list_keys")]);
+  $("key-options").replaceChildren(
+    ...keyList.filter((k) => k.identity_file).map((k) => {
+      const o = document.createElement("option");
+      o.value = k.identity_file;
+      o.label = `${k.kind} ${k.comment}`;
+      return o;
+    })
+  );
+  $("host-options").replaceChildren(
+    ...blocks.flatMap((b) => concreteAliases(b.patterns)).map((a) => {
+      const o = document.createElement("option");
+      o.value = a;
+      return o;
+    })
+  );
+  if (select) selectedBlock = blocks.find((b) => blockKey(b) === blockKey(select)) ?? null;
+  else if (selectedBlock) selectedBlock = blocks.find((b) => blockKey(b) === blockKey(selectedBlock)) ?? null;
+  renderBlocks();
+  if (selectedBlock) fillHostForm(selectedBlock);
+  else if (!$("host-form").hidden && !isNewHost) closeHostForm();
+}
+
+function renderBlocks() {
+  const q = $("host-filter").value.trim().toLowerCase();
+  const list = $("host-blocks");
+  list.replaceChildren();
+  const shown = blocks.filter(
+    (b) => !q || b.patterns.toLowerCase().includes(q) || b.hostname.toLowerCase().includes(q)
+  );
+  if (!shown.length) {
+    list.append(el("li", "placeholder", blocks.length ? "没有匹配的主机" : "~/.ssh/config 中还没有主机"));
+    return;
+  }
+  for (const b of shown) {
+    const li = el("li");
+    const name = el("div", "b-name");
+    name.append(el("span", null, b.patterns));
+    if (b.proxy_jump) name.append(el("span", "tag", "跳板"));
+    if (b.proxy_command) name.append(el("span", "tag", "ProxyCommand"));
+    const sub = [b.user && `${b.user}@`, b.hostname || "", b.port && `:${b.port}`].join("");
+    li.append(name, el("div", "b-sub", sub || (b.file === configPath ? "—" : whereOf(b))));
+    li.title = whereOf(b);
+    if (selectedBlock && blockKey(b) === blockKey(selectedBlock)) li.classList.add("selected");
+    li.addEventListener("click", () => selectBlock(b));
+    list.append(li);
+  }
+}
+
+let isNewHost = false;
+
+async function selectBlock(b) {
+  if (hostDirty && !(await ask("放弃修改", "当前主机的修改还没有保存，确定切换吗？", "放弃修改"))) return;
+  selectedBlock = b;
+  isNewHost = !b;
+  renderBlocks();
+  fillHostForm(b);
+}
+
+const currentVia = () => document.querySelector('input[name="via"]:checked')?.value ?? "direct";
+
+function applyVia() {
+  const via = currentVia();
+  for (const node of document.querySelectorAll("#host-form [data-via]")) node.hidden = node.dataset.via !== via;
+}
+
+function fillHostForm(b) {
+  const form = $("host-form");
+  form.hidden = false;
+  $("host-empty").hidden = true;
+  $("host-error").hidden = true;
+  $("host-test-out").hidden = true;
+  $("host-form-title").textContent = b ? `编辑主机 ${b.patterns}` : "新建主机";
+  $("host-form-where").textContent = b ? `位于 ${whereOf(b)}` : "将添加到 ~/.ssh/config（放在 Host * 之前）";
+  $("h-patterns").value = b?.patterns ?? "";
+  $("h-hostname").value = b?.hostname ?? "";
+  $("h-user").value = b?.user ?? "";
+  $("h-port").value = b?.port ?? "";
+  $("h-identity").value = b?.identity_file ?? "";
+  $("h-jump").value = b?.proxy_jump ?? "";
+  $("h-command").value = b?.proxy_command ?? "";
+  const via = b?.proxy_command ? "command" : b?.proxy_jump ? "jump" : "direct";
+  document.querySelector(`input[name="via"][value="${via}"]`).checked = true;
+  applyVia();
+  const others = b?.others ?? [];
+  $("h-others").textContent = others.join("\n");
+  for (const node of document.querySelectorAll("#host-form [data-others]")) node.hidden = !others.length;
+  $("host-test").disabled = !b;
+  $("host-delete").disabled = !b;
+  hostDirty = false;
+  if (!b) $("h-patterns").focus();
+}
+
+function closeHostForm() {
+  $("host-form").hidden = true;
+  $("host-empty").hidden = false;
+  hostDirty = false;
+  isNewHost = false;
+}
+
+function showHostError(message) {
+  const box = $("host-error");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function saveHost() {
+  const via = currentVia();
+  const input = {
+    file: selectedBlock?.file ?? null,
+    line: selectedBlock?.line ?? null,
+    original_patterns: selectedBlock?.patterns ?? null,
+    patterns: $("h-patterns").value,
+    hostname: $("h-hostname").value,
+    user: $("h-user").value,
+    port: $("h-port").value,
+    identity_file: $("h-identity").value,
+    proxy_jump: via === "jump" ? $("h-jump").value : "",
+    proxy_command: via === "command" ? $("h-command").value : "",
   };
-  dialog.showModal();
+  if (via === "jump" && !input.proxy_jump.trim()) return showHostError("请填写跳板机。");
+  if (via === "command" && !input.proxy_command.trim()) return showHostError("请填写 ProxyCommand。");
+  let saved;
+  try {
+    saved = await invoke("save_ssh_host", { input });
+  } catch (err) {
+    showHostError(String(err));
+    return;
+  }
+  hostDirty = false;
+  isNewHost = false;
+  toast("已保存到 ~/.ssh/config");
+  await loadConfig(saved);
+}
+
+async function deleteHost() {
+  const b = selectedBlock;
+  if (!b || !(await ask("删除主机", `确定从 ssh 配置中删除「${b.patterns}」吗？`, "删除"))) return;
+  await call("delete_ssh_host", { file: b.file, line: b.line, patterns: b.patterns });
+  selectedBlock = null;
+  closeHostForm();
+  toast("已删除");
+  await loadConfig();
+}
+
+async function testHost() {
+  const alias = selectedBlock && concreteAliases(selectedBlock.patterns)[0];
+  if (!alias) return toast("通配符主机无法直接测试");
+  if (hostDirty) return toast("请先保存修改再测试");
+  const out = $("host-test-out");
+  out.hidden = false;
+  out.className = "test-out";
+  out.textContent = `正在测试 ssh ${alias} …`;
+  $("host-test").disabled = true;
+  try {
+    const r = await call("test_ssh_host", { alias });
+    out.className = `test-out ${r.ok ? "ok" : "bad"}`;
+    out.textContent = `${r.ok ? "✓ 连接成功" : "✗ 连接失败"}\n${r.output}`;
+  } finally {
+    $("host-test").disabled = false;
+  }
 }
 
 // ---- wiring ----------------------------------------------------------------
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => showView(tab.dataset.view));
+}
+$("host-filter").addEventListener("input", renderBlocks);
+$("host-add").addEventListener("click", () => selectBlock(null));
+$("config-open").addEventListener("click", () => call("open_ssh_config"));
+$("host-form").addEventListener("input", () => (hostDirty = true));
+$("host-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  saveHost();
+});
+$("host-reset").addEventListener("click", () => {
+  if (selectedBlock) fillHostForm(selectedBlock);
+  else closeHostForm();
+});
+$("host-delete").addEventListener("click", deleteHost);
+$("host-test").addEventListener("click", testHost);
+for (const radio of document.querySelectorAll('input[name="via"]')) {
+  radio.addEventListener("change", applyVia);
+}
+for (const btn of document.querySelectorAll("[data-tpl]")) {
+  btn.addEventListener("click", () => {
+    $("h-command").value = btn.dataset.tpl;
+    hostDirty = true;
+    $("h-command").focus();
+  });
+}
+$("key-copy").addEventListener("click", () => shownKey && copyKey(shownKey));
+
 $("add").addEventListener("click", () => openEditor(null));
 $("start-all").addEventListener("click", () => call("start_all"));
 $("stop-all").addEventListener("click", () => call("stop_all"));

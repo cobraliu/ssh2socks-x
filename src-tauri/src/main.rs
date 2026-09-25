@@ -1,16 +1,18 @@
 // No console window next to the GUI on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod keys;
 mod models;
 mod platform;
 mod probe;
 mod ssh_config;
+mod ssh_edit;
 mod store;
 mod tunnel;
 
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager as _, RunEvent, State, WindowEvent};
@@ -135,6 +137,96 @@ fn tunnel_logs(mgr: Mgr, id: String) -> Vec<String> {
     mgr.logs(&id)
 }
 
+// ---- ssh keys + config ----------------------------------------------------
+
+#[tauri::command]
+fn list_keys() -> Vec<keys::KeyInfo> {
+    keys::list_keys()
+}
+
+#[derive(Serialize)]
+struct SshConfigView {
+    path: String,
+    blocks: Vec<ssh_edit::HostBlock>,
+}
+
+#[tauri::command]
+fn list_ssh_hosts() -> SshConfigView {
+    SshConfigView {
+        path: ssh_edit::main_config()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        blocks: ssh_edit::list_blocks(),
+    }
+}
+
+#[tauri::command]
+fn save_ssh_host(input: ssh_edit::HostInput) -> Result<ssh_edit::HostBlock, String> {
+    let config = ssh_edit::main_config().ok_or("找不到用户主目录")?;
+    ssh_edit::save_block(&config, &input)
+}
+
+#[tauri::command]
+fn delete_ssh_host(file: String, line: usize, patterns: String) -> Result<(), String> {
+    ssh_edit::delete_block(&file, line, &patterns)
+}
+
+#[derive(Serialize)]
+struct TestResult {
+    ok: bool,
+    output: String,
+}
+
+/// Log in once (no command, no tty) to check the host, keys and proxy setup.
+#[tauri::command]
+async fn test_ssh_host(alias: String) -> TestResult {
+    let mut cmd = tokio::process::Command::new("ssh");
+    cmd.args([
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        &alias,
+        "exit",
+    ])
+    .stdin(std::process::Stdio::null())
+    .kill_on_drop(true);
+    platform::hide_console(&mut cmd);
+    match tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output()).await {
+        Err(_) => TestResult {
+            ok: false,
+            output: "30 秒内没有完成登录（网络不通，或 ProxyCommand / 跳板机卡住）".into(),
+        },
+        Ok(Err(e)) => TestResult {
+            ok: false,
+            output: format!("无法启动 ssh：{e}"),
+        },
+        Ok(Ok(out)) => {
+            let text = platform::decode(&out.stderr);
+            let ok = out.status.success();
+            TestResult {
+                ok,
+                output: match (ok, text.trim()) {
+                    (true, "") => "登录成功".into(),
+                    (_, t) => t.to_string(),
+                },
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn open_ssh_config() -> Result<(), String> {
+    let path = ssh_edit::main_config().ok_or("找不到用户主目录")?;
+    if !path.exists() {
+        return Err("~/.ssh/config 还不存在，先添加一个主机即可创建。".into());
+    }
+    platform::open_in_editor(&path).map_err(|e| format!("无法打开编辑器：{e}"))
+}
+
 // ---- tray + window ------------------------------------------------------
 
 pub fn update_tray_tooltip(app: &AppHandle, mgr: &Manager) {
@@ -226,6 +318,12 @@ fn main() {
             stop_all,
             tunnel_logs,
             open_in_browser,
+            list_keys,
+            list_ssh_hosts,
+            save_ssh_host,
+            delete_ssh_host,
+            test_ssh_host,
+            open_ssh_config,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ssh2socks");

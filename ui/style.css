@@ -104,15 +104,40 @@ h1 { margin: 0; font-size: 16px; }
 .btn:disabled:hover { background: var(--panel); }
 .btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ---- tabs ---- */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  margin-right: auto;
+  margin-left: 12px;
+}
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  padding: 4px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tab.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+
 /* ---- layout ---- */
-main {
+.view {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(140px, 3fr) minmax(120px, 2fr);
   gap: 12px;
   padding: 0 18px 18px;
 }
+.view.tunnels { grid-template-rows: minmax(140px, 3fr) minmax(120px, 2fr); }
+.view.config { grid-template-columns: minmax(200px, 280px) 1fr; }
+.view.keys { grid-template-rows: 1fr; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -278,6 +303,76 @@ input[type="checkbox"] { width: auto; margin: 0 6px 0 0; }
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
   font-size: 13px;
 }
+
+/* ---- ssh config ---- */
+.side-head, .side-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  flex: none;
+}
+.side-head { border-bottom: 1px solid var(--border); }
+.side-foot { border-top: 1px solid var(--border); justify-content: space-between; }
+.side-foot .mono { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-head input { padding: 4px 8px; }
+.blocks { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; }
+.blocks li { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.blocks li:hover { background: var(--hover); }
+.blocks li.selected { background: var(--selected); }
+.blocks .b-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.blocks .b-name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blocks .b-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blocks li.placeholder { cursor: default; color: var(--muted); }
+.form-panel { overflow: auto; }
+.host-form { padding: 18px 22px; }
+.host-form h2 { margin: 0; font-size: 16px; }
+.where { margin: 2px 0 16px; font-size: 12px; }
+.grid.wide { grid-template-columns: 130px 1fr; }
+.grid .label[data-others], .grid > label[for="h-command"] { align-self: start; padding-top: 6px; }
+textarea {
+  font: 13px/1.5 ui-monospace, "SF Mono", Consolas, "Cascadia Mono", monospace;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  width: 100%;
+  resize: vertical;
+  user-select: text;
+}
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.templates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px; }
+.others {
+  margin: 0;
+  padding: 6px 9px;
+  background: var(--log-bg);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.form-actions { display: flex; gap: 8px; margin-top: 18px; }
+.spacer { flex: 1; }
+.test-out {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--log-bg);
+  border: 1px solid var(--border);
+  font: 12.5px/1.55 ui-monospace, "SF Mono", Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+.test-out.ok { border-color: var(--green); }
+.test-out.bad { border-color: var(--red); }
+
+/* ---- keys ---- */
+.key-row { grid-template-columns: minmax(100px, 1fr) 110px minmax(180px, 2.2fr) minmax(90px, 1.2fr) 160px; }
+.key-text { margin-top: 4px; word-break: break-all; }
+.small-text { font-size: 12px; margin: -8px 0 10px; word-break: break-all; }
 
 @media (max-width: 760px) {
   .row { grid-template-columns: 84px 1fr 0 0 minmax(90px, 1fr) 220px; }
