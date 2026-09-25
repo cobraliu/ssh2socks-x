@@ -34,6 +34,8 @@ Rust + Tauri v2 实现，安装包/可执行文件只有几 MB，支持 Windows�
   - 导入前逐项校验并显示结果：解析私钥 → 用口令解密 → 公私钥配对 → 私钥签名、公钥验签 → 公钥加密、私钥解密（RSA 用 OAEP，Ed25519 换算成 X25519 后做密钥交换）
   - 去重：文件名已存在，或同一把密钥（指纹相同）已经以别的名字存在时，拒绝保存；已有文件永远不会被覆盖
   - 私钥以 `600` 权限保存（Linux / macOS）
+- 中英文界面：包括报错、日志和托盘菜单。首次启动跟随系统语言，可随时用右上角「EN / 中」按钮切换
+- 明暗主题：跟随系统，或用右上角主题按钮（◐ / ☀ / ☾）固定为浅色或深色。两项选择都会被记住
 - 系统托盘常驻，关闭窗口不会断开隧道
 - 退出时清理所有 ssh 子进程（Windows 用 Job Object，Linux 用 `PR_SET_PDEATHSIG`）
 
@@ -74,6 +76,8 @@ GatewayPorts clientspecified   # 或 yes
 - macOS：`~/Library/Application Support/ssh2socks/tunnels.json`
 - Windows：`%APPDATA%\ssh2socks\tunnels.json`
 
+语言和主题保存在同一目录的 `settings.json` 中。
+
 ## 本地构建
 
 需要 Rust（stable）、Node.js 20+，以及 [Tauri 的系统依赖](https://v2.tauri.app/start/prerequisites/)。
@@ -98,7 +102,7 @@ cargo test
 `.github/workflows/ci.yml`：
 
 - 每次推送 / PR：fmt + clippy + 测试，然后在 Windows、macOS、Linux 上构建并上传产物
-- 推送 `v*` 标签（如 `git tag v0.5.0 && git push origin v0.5.0`）：额外创建 GitHub Release 并附上全部安装包
+- 推送 `v*` 标签（如 `git tag v0.6.0 && git push origin v0.6.0`）：额外创建 GitHub Release 并附上全部安装包
 
 ## 许可证
 

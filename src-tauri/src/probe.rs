@@ -26,7 +26,7 @@ fn ok(latency_ms: Option<f64>) -> ProbeResult {
     ProbeResult {
         ok: true,
         latency_ms,
-        message: "通".into(),
+        message: tr!("通", "up"),
     }
 }
 
@@ -95,18 +95,23 @@ fn parse_url(url: &str) -> Option<Target> {
 async fn socks5_connect(proxy_port: u16, host: &str, port: u16) -> Result<TcpStream, String> {
     let mut sock = TcpStream::connect(("127.0.0.1", proxy_port))
         .await
-        .map_err(|e| format!("无法连接本地代理：{e}"))?;
+        .map_err(|e| {
+            tr!(
+                "无法连接本地代理：{e}",
+                "Could not connect to the local proxy: {e}"
+            )
+        })?;
     // Greeting: SOCKS5, 1 method, no-auth.
     sock.write_all(&[0x05, 0x01, 0x00]).await.map_err(io_err)?;
     let mut reply = [0u8; 2];
     sock.read_exact(&mut reply).await.map_err(io_err)?;
     if reply != [0x05, 0x00] {
-        return Err("SOCKS5 握手被拒绝".into());
+        return Err(tr!("SOCKS5 握手被拒绝", "SOCKS5 handshake rejected"));
     }
     // CONNECT with address type = domain name (resolved by the ssh server).
     let host_bytes = host.as_bytes();
     if host_bytes.len() > 255 {
-        return Err("主机名过长".into());
+        return Err(tr!("主机名过长", "Host name too long"));
     }
     let mut req = vec![0x05, 0x01, 0x00, 0x03, host_bytes.len() as u8];
     req.extend_from_slice(host_bytes);
@@ -115,7 +120,11 @@ async fn socks5_connect(proxy_port: u16, host: &str, port: u16) -> Result<TcpStr
     let mut header = [0u8; 4];
     sock.read_exact(&mut header).await.map_err(io_err)?;
     if header[1] != 0x00 {
-        return Err(format!("远端无法连接目标（SOCKS 错误码 {}）", header[1]));
+        return Err(tr!(
+            "远端无法连接目标（SOCKS 错误码 {}）",
+            "The server could not reach the target (SOCKS error {})",
+            header[1]
+        ));
     }
     let skip = match header[3] {
         0x01 => 4 + 2,
@@ -125,7 +134,7 @@ async fn socks5_connect(proxy_port: u16, host: &str, port: u16) -> Result<TcpStr
             sock.read_exact(&mut len).await.map_err(io_err)?;
             len[0] as usize + 2
         }
-        _ => return Err("SOCKS5 响应格式错误".into()),
+        _ => return Err(tr!("SOCKS5 响应格式错误", "Malformed SOCKS5 response")),
     };
     let mut rest = vec![0u8; skip];
     sock.read_exact(&mut rest).await.map_err(io_err)?;
@@ -134,7 +143,7 @@ async fn socks5_connect(proxy_port: u16, host: &str, port: u16) -> Result<TcpStr
 
 fn io_err(e: std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::UnexpectedEof {
-        "代理关闭了连接".into()
+        tr!("代理关闭了连接", "The proxy closed the connection")
     } else {
         e.to_string()
     }
@@ -145,8 +154,7 @@ async fn probe_inner(proxy_port: u16, target: &Target) -> Result<(), String> {
     if target.https {
         return Ok(());
     }
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: ssh2socks\r\nConnection: close\r\nAccept: */*\r\n\r\n",
+    let request = format!("GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: ssh2socks\r\nConnection: close\r\nAccept: */*\r\n\r\n",
         target.path, target.host
     );
     sock.write_all(request.as_bytes()).await.map_err(io_err)?;
@@ -155,13 +163,13 @@ async fn probe_inner(proxy_port: u16, target: &Target) -> Result<(), String> {
     if buf[..n].starts_with(b"HTTP/") {
         Ok(())
     } else {
-        Err("无有效响应".into())
+        Err(tr!("无有效响应", "No valid response"))
     }
 }
 
 pub async fn run_probe(proxy_port: u16, probe_url: &str, limit: Duration) -> ProbeResult {
     let Some(target) = parse_url(probe_url) else {
-        return fail(None, "无效的探测地址");
+        return fail(None, tr!("无效的探测地址", "Invalid probe URL"));
     };
     let started = Instant::now();
     let outcome = timeout(limit, probe_inner(proxy_port, &target)).await;
@@ -169,7 +177,7 @@ pub async fn run_probe(proxy_port: u16, probe_url: &str, limit: Duration) -> Pro
     match outcome {
         Ok(Ok(())) => ok(latency),
         Ok(Err(message)) => fail(latency, message),
-        Err(_) => fail(latency, "超时"),
+        Err(_) => fail(latency, tr!("超时", "Timed out")),
     }
 }
 
@@ -185,7 +193,15 @@ pub async fn probe_local_forward(port: u16, target: &str) -> ProbeResult {
     .await
     {
         Ok(Ok(sock)) => sock,
-        _ => return fail(None, format!("本地端口 {port} 未监听")),
+        _ => {
+            return fail(
+                None,
+                tr!(
+                    "本地端口 {port} 未监听",
+                    "Nothing is listening on local port {port}"
+                ),
+            )
+        }
     };
     let mut buf = [0u8; 1];
     match timeout(FORWARD_SETTLE, sock.read(&mut buf)).await {
@@ -193,7 +209,10 @@ pub async fn probe_local_forward(port: u16, target: &str) -> ProbeResult {
         Ok(Ok(n)) if n > 0 => ok(Some(elapsed_ms(started))),
         // Silent services (HTTP waits for a request) keep the line open.
         Err(_) => ok(None),
-        Ok(_) => fail(None, format!("服务器无法连接 {target}")),
+        Ok(_) => fail(
+            None,
+            tr!("服务器无法连接 {target}", "The server can't reach {target}"),
+        ),
     }
 }
 
@@ -210,7 +229,13 @@ pub async fn probe_remote_forward(
     )
     .await;
     if !matches!(local, Ok(Ok(_))) {
-        return fail(None, format!("本地 {local_port} 端口没有服务在运行"));
+        return fail(
+            None,
+            tr!(
+                "本地 {local_port} 端口没有服务在运行",
+                "No service is running on local port {local_port}"
+            ),
+        );
     }
     let started = Instant::now();
     match timeout(
@@ -222,8 +247,7 @@ pub async fn probe_remote_forward(
         Ok(Ok(_)) => ok(Some(elapsed_ms(started))),
         _ => fail(
             None,
-            format!(
-                "本机访问不到 {}:{remote_port}（检查服务器防火墙 / sshd 的 GatewayPorts）",
+            tr!("本机访问不到 {}:{remote_port}（检查服务器防火墙 / sshd 的 GatewayPorts）", "{}:{remote_port} is not reachable from this machine (check the server firewall / sshd GatewayPorts)",
                 host_for_url(public_host)
             ),
         ),

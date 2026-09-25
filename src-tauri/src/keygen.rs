@@ -113,24 +113,33 @@ pub fn suggest_name(dir: &Path, base: &str) -> String {
 
 fn check_name(dir: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     if name.is_empty() {
-        return Err("请填写文件名。".into());
+        return Err(tr!("请填写文件名。", "Enter a file name."));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
         || name.starts_with('.')
     {
-        return Err("文件名只能包含字母、数字、点、下划线和减号。".into());
+        return Err(tr!(
+            "文件名只能包含字母、数字、点、下划线和减号。",
+            "File names may only contain letters, digits, dots, underscores and hyphens."
+        ));
     }
     if name.ends_with(".pub") || RESERVED.contains(&name) {
-        return Err(format!("不能使用「{name}」作为密钥文件名。"));
+        return Err(tr!(
+            "不能使用「{name}」作为密钥文件名。",
+            "\"{name}\" can't be used as a key file name."
+        ));
     }
     let private = dir.join(name);
     let public = dir.join(format!("{name}.pub"));
     for p in [&private, &public] {
         if p.exists() {
             let file = p.file_name().unwrap_or_default().to_string_lossy();
-            return Err(format!("~/.ssh/{file} 已存在，请换一个文件名。"));
+            return Err(tr!(
+                "~/.ssh/{file} 已存在，请换一个文件名。",
+                "~/.ssh/{file} already exists. Choose another file name."
+            ));
         }
     }
     Ok((private, public))
@@ -144,15 +153,25 @@ pub fn generate(dir: &Path, input: &GenerateInput) -> Result<KeyInfo, String> {
         "rsa" => {
             let bits = input.bits.unwrap_or(3072);
             if !matches!(bits, 2048 | 3072 | 4096) {
-                return Err("RSA 长度只支持 2048、3072、4096。".into());
+                return Err(tr!(
+                    "RSA 长度只支持 2048、3072、4096。",
+                    "RSA key size must be 2048, 3072 or 4096."
+                ));
             }
             KeypairData::from(
-                RsaKeypair::random(&mut OsRng, bits).map_err(|e| format!("生成失败：{e}"))?,
+                RsaKeypair::random(&mut OsRng, bits)
+                    .map_err(|e| tr!("生成失败：{e}", "Generation failed: {e}"))?,
             )
         }
-        other => return Err(format!("不支持的密钥类型：{other}")),
+        other => {
+            return Err(tr!(
+                "不支持的密钥类型：{other}",
+                "Unsupported key type: {other}"
+            ))
+        }
     };
-    let key = PrivateKey::new(data, input.comment.trim()).map_err(|e| format!("生成失败：{e}"))?;
+    let key = PrivateKey::new(data, input.comment.trim())
+        .map_err(|e| tr!("生成失败：{e}", "Generation failed: {e}"))?;
     let public = key.public_key().clone();
     // Same check an imported key gets, so a broken RNG or library can't
     // hand out a key that doesn't work.
@@ -161,12 +180,16 @@ pub fn generate(dir: &Path, input: &GenerateInput) -> Result<KeyInfo, String> {
     let stored = if input.passphrase.is_empty() {
         key
     } else {
-        key.encrypt(&mut OsRng, &input.passphrase)
-            .map_err(|e| format!("加密私钥失败：{e}"))?
+        key.encrypt(&mut OsRng, &input.passphrase).map_err(|e| {
+            tr!(
+                "加密私钥失败：{e}",
+                "Could not encrypt the private key: {e}"
+            )
+        })?
     };
     let pem = stored
         .to_openssh(LineEnding::LF)
-        .map_err(|e| format!("编码私钥失败：{e}"))?;
+        .map_err(|e| tr!("编码私钥失败：{e}", "Could not encode the private key: {e}"))?;
     save_pair(dir, &private_path, &public_path, pem.as_bytes(), &public)?;
     find_key(dir, name)
 }
@@ -188,8 +211,8 @@ pub fn import(dir: &Path, input: &ImportInput) -> Result<KeyInfo, String> {
     let mut steps = Vec::new();
     let Ok((paths, public, _)) = checked_import(dir, input, &mut steps) else {
         let failed = steps.iter().find(|s| !s.ok);
-        return Err(failed.map_or("校验失败".into(), |s| {
-            format!("{}：{}", s.title, s.detail)
+        return Err(failed.map_or(tr!("校验失败", "Checks failed"), |s| {
+            format!("{}: {}", s.title, s.detail)
         }));
     };
     let mut text = input.private_key.replace("\r\n", "\n").trim().to_string();
@@ -207,15 +230,22 @@ fn checked_import(
 ) -> Result<((PathBuf, PathBuf), PublicKey, String), ()> {
     let (public, summary) = run_checks(input, steps)?;
     let paths = check_name(dir, input.name.trim()).and_then(|paths| match same_key(dir, &public) {
-        Some(existing) => Err(format!("这把密钥已经存在，文件名是「{existing}」。")),
+        Some(existing) => Err(tr!(
+            "这把密钥已经存在，文件名是「{existing}」。",
+            "This key already exists as \"{existing}\"."
+        )),
         None => Ok(paths),
     });
     let ok = paths.is_ok();
     steps.push(Step {
-        title: "重复检查".into(),
+        title: tr!("重复检查", "Duplicate check"),
         ok,
         detail: match &paths {
-            Ok(_) => format!("将保存为 ~/.ssh/{0} 和 {0}.pub", input.name.trim()),
+            Ok(_) => tr!(
+                "将保存为 ~/.ssh/{0} 和 {0}.pub",
+                "Will be saved as ~/.ssh/{0} and {0}.pub",
+                input.name.trim()
+            ),
             Err(e) => e.clone(),
         },
     });
@@ -231,13 +261,16 @@ struct Parsed {
 fn parse_private(text: &str) -> Result<Parsed, String> {
     let text = text.trim();
     if text.is_empty() {
-        return Err("请选择或粘贴私钥。".into());
+        return Err(tr!("请选择或粘贴私钥。", "Choose or paste a private key."));
     }
     if text.starts_with("PuTTY-User-Key-File") {
-        return Err("这是 PuTTY 的 .ppk 格式，请先在 PuTTYgen 里「Conversions → Export OpenSSH key」导出后再导入。".into());
+        return Err(tr!("这是 PuTTY 的 .ppk 格式，请先在 PuTTYgen 里「Conversions → Export OpenSSH key」导出后再导入。", "This is a PuTTY .ppk file. Export it in PuTTYgen with \"Conversions → Export OpenSSH key\" first, then import that."));
     }
     if text.starts_with("ssh-") || text.starts_with("ecdsa-") {
-        return Err("这是公钥，请在「私钥」处选择不带 .pub 的那个文件。".into());
+        return Err(tr!(
+            "这是公钥，请在「私钥」处选择不带 .pub 的那个文件。",
+            "This is a public key. For the private key, choose the file without .pub."
+        ));
     }
     if text.contains("BEGIN OPENSSH PRIVATE KEY") {
         return PrivateKey::from_openssh(text)
@@ -245,13 +278,15 @@ fn parse_private(text: &str) -> Result<Parsed, String> {
                 key,
                 format: "OpenSSH",
             })
-            .map_err(|e| format!("私钥内容损坏或不完整（{e}）"));
+            .map_err(|e| {
+                tr!(
+                    "私钥内容损坏或不完整（{e}）",
+                    "The private key is damaged or incomplete ({e})"
+                )
+            });
     }
     if text.contains("ENCRYPTED") {
-        return Err(
-            "暂不支持加密的 PEM 私钥，请先运行 ssh-keygen -p -f <文件> 转为 OpenSSH 格式后再导入。"
-                .into(),
-        );
+        return Err(tr!("暂不支持加密的 PEM 私钥，请先运行 ssh-keygen -p -f <文件> 转为 OpenSSH 格式后再导入。", "Encrypted PEM private keys are not supported. Run ssh-keygen -p -f <file> to convert it to OpenSSH format first."));
     }
     let rsa = if text.contains("BEGIN RSA PRIVATE KEY") {
         rsa::RsaPrivateKey::from_pkcs1_pem(text)
@@ -262,12 +297,20 @@ fn parse_private(text: &str) -> Result<Parsed, String> {
             .ok()
             .map(|k| (k, "PEM (PKCS#8)"))
     } else {
-        return Err(
-            "无法识别的私钥格式，需要 OpenSSH（BEGIN OPENSSH PRIVATE KEY）或 RSA PEM 格式。".into(),
-        );
+        return Err(tr!("无法识别的私钥格式，需要 OpenSSH（BEGIN OPENSSH PRIVATE KEY）或 RSA PEM 格式。", "Unrecognized private key format. OpenSSH (BEGIN OPENSSH PRIVATE KEY) or RSA PEM is required."));
     };
-    let (rsa, format) = rsa.ok_or("私钥内容损坏，或不是 RSA 私钥。")?;
-    let pair = RsaKeypair::try_from(rsa).map_err(|e| format!("无法读取 RSA 私钥：{e}"))?;
+    let (rsa, format) = rsa.ok_or_else(|| {
+        tr!(
+            "私钥内容损坏，或不是 RSA 私钥。",
+            "The private key is damaged, or is not an RSA key."
+        )
+    })?;
+    let pair = RsaKeypair::try_from(rsa).map_err(|e| {
+        tr!(
+            "无法读取 RSA 私钥：{e}",
+            "Could not read the RSA private key: {e}"
+        )
+    })?;
     let key = PrivateKey::new(KeypairData::from(pair), "").map_err(|e| e.to_string())?;
     Ok(Parsed { key, format })
 }
@@ -304,10 +347,11 @@ fn run_checks(input: &ImportInput, steps: &mut Vec<Step>) -> Result<(PublicKey, 
 
     let mut parsed = None;
     step(
-        "读取私钥",
+        &tr!("读取私钥", "Read private key"),
         parse_private(&input.private_key).map(|p| {
-            let d = format!(
+            let d = tr!(
                 "{} 格式，{}",
+                "{} format, {}",
                 p.format,
                 describe(p.key.public_key().key_data())
             );
@@ -319,21 +363,32 @@ fn run_checks(input: &ImportInput, steps: &mut Vec<Step>) -> Result<(PublicKey, 
 
     let mut decrypted = None;
     step(
-        "解密私钥",
+        &tr!("解密私钥", "Decrypt private key"),
         if key.is_encrypted() {
             if input.passphrase.is_empty() {
-                Err("私钥已加密，请填写口令。".into())
+                Err(tr!(
+                    "私钥已加密，请填写口令。",
+                    "The private key is encrypted. Enter its passphrase."
+                ))
             } else {
                 key.decrypt(&input.passphrase)
                     .map(|k| {
                         decrypted = Some(k);
-                        "口令正确，已解密".to_string()
+                        tr!("口令正确，已解密", "Passphrase correct, decrypted")
                     })
-                    .map_err(|_| "口令错误，无法解密私钥。".to_string())
+                    .map_err(|_| {
+                        tr!(
+                            "口令错误，无法解密私钥。",
+                            "Wrong passphrase; the private key could not be decrypted."
+                        )
+                    })
             }
         } else {
             decrypted = Some(key.clone());
-            Ok("私钥未加密（无口令）".into())
+            Ok(tr!(
+                "私钥未加密（无口令）",
+                "The private key is not encrypted (no passphrase)"
+            ))
         },
     )?;
     let key = decrypted.ok_or(())?;
@@ -341,22 +396,22 @@ fn run_checks(input: &ImportInput, steps: &mut Vec<Step>) -> Result<(PublicKey, 
     let derived = key.public_key().clone();
     let mut public = derived.clone();
     step(
-        "公私钥配对",
+        &tr!("公私钥配对", "Key pair match"),
         match input
             .public_key
             .lines()
             .map(str::trim)
             .find(|l| !l.is_empty())
         {
-            None => Ok("未提供公钥，将从私钥导出".into()),
+            None => Ok(tr!("未提供公钥，将从私钥导出", "No public key given; it will be derived from the private key")),
             Some(line) => match PublicKey::from_openssh(line) {
-                Err(_) => Err("公钥格式不正确，应为 ssh-ed25519 / ssh-rsa 开头的一行。".into()),
+                Err(_) => Err(tr!("公钥格式不正确，应为 ssh-ed25519 / ssh-rsa 开头的一行。", "Invalid public key. It should be one line starting with ssh-ed25519 / ssh-rsa.")),
                 Ok(p) if p.key_data() != derived.key_data() => {
-                    Err("公钥和私钥不是一对（指纹不一致）。".into())
+                    Err(tr!("公钥和私钥不是一对（指纹不一致）。", "The public and private keys are not a pair (fingerprints differ)."))
                 }
                 Ok(p) => {
                     public = p;
-                    Ok("公钥与私钥匹配".into())
+                    Ok(tr!("公钥与私钥匹配", "Public key matches the private key"))
                 }
             },
         },
@@ -365,9 +420,12 @@ fn run_checks(input: &ImportInput, steps: &mut Vec<Step>) -> Result<(PublicKey, 
         public.set_comment(key.comment());
     }
 
-    step("签名验证", sign_and_verify(&key, &public))?;
+    step(
+        &tr!("签名验证", "Sign and verify"),
+        sign_and_verify(&key, &public),
+    )?;
     if let Some(result) = encrypt_round_trip(&key, &public) {
-        step("加密解密", result)?;
+        step(&tr!("加密解密", "Encrypt and decrypt"), result)?;
     }
 
     let summary = format!(
@@ -390,10 +448,10 @@ fn sign_and_verify(key: &PrivateKey, public: &PublicKey) -> Result<String, Strin
             use rsa::signature::{SignatureEncoding as _, Signer as _};
             let signing = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(rsa_private(pair)?);
             let data = SshSig::signed_data(NAMESPACE, HashAlg::Sha512, &msg)
-                .map_err(|e| format!("私钥无法签名：{e}"))?;
+                .map_err(|e| tr!("私钥无法签名：{e}", "The private key can't sign: {e}"))?;
             let raw = signing
                 .try_sign(&data)
-                .map_err(|e| format!("私钥无法签名：{e}"))?;
+                .map_err(|e| tr!("私钥无法签名：{e}", "The private key can't sign: {e}"))?;
             let alg = Algorithm::Rsa {
                 hash: Some(HashAlg::Sha512),
             };
@@ -406,27 +464,36 @@ fn sign_and_verify(key: &PrivateKey, public: &PublicKey) -> Result<String, Strin
                         sig,
                     )
                 })
-                .map_err(|e| format!("私钥无法签名：{e}"))?
+                .map_err(|e| tr!("私钥无法签名：{e}", "The private key can't sign: {e}"))?
         }
         _ => key
             .sign(NAMESPACE, HashAlg::Sha512, &msg)
-            .map_err(|e| format!("私钥无法签名：{e}"))?,
+            .map_err(|e| tr!("私钥无法签名：{e}", "The private key can't sign: {e}"))?,
     };
-    public
-        .verify(NAMESPACE, &msg, &sig)
-        .map_err(|_| "公钥无法验证私钥的签名。".to_string())?;
+    public.verify(NAMESPACE, &msg, &sig).map_err(|_| {
+        tr!(
+            "公钥无法验证私钥的签名。",
+            "The public key can't verify the private key's signature."
+        )
+    })?;
     msg[0] ^= 1;
     if public.verify(NAMESPACE, &msg, &sig).is_ok() {
-        return Err("篡改后的消息仍能通过验证，密钥异常。".into());
+        return Err(tr!(
+            "篡改后的消息仍能通过验证，密钥异常。",
+            "A tampered message still verified; the key is faulty."
+        ));
     }
-    Ok("私钥签名、公钥验签通过".into())
+    Ok(tr!(
+        "私钥签名、公钥验签通过",
+        "Signed with the private key, verified with the public key"
+    ))
 }
 
 fn rsa_private(pair: &RsaKeypair) -> Result<rsa::RsaPrivateKey, String> {
     let int = |m: &ssh_key::Mpint| {
         m.as_positive_bytes()
             .map(rsa::BigUint::from_bytes_be)
-            .ok_or_else(|| "RSA 私钥参数无效。".to_string())
+            .ok_or_else(|| tr!("RSA 私钥参数无效。", "Invalid RSA private key parameters."))
     };
     let key = rsa::RsaPrivateKey::from_components(
         int(&pair.public.n)?,
@@ -434,9 +501,18 @@ fn rsa_private(pair: &RsaKeypair) -> Result<rsa::RsaPrivateKey, String> {
         int(&pair.private.d)?,
         vec![int(&pair.private.p)?, int(&pair.private.q)?],
     )
-    .map_err(|e| format!("RSA 私钥参数无效：{e}"))?;
-    key.validate()
-        .map_err(|e| format!("RSA 私钥参数无效：{e}"))?;
+    .map_err(|e| {
+        tr!(
+            "RSA 私钥参数无效：{e}",
+            "Invalid RSA private key parameters: {e}"
+        )
+    })?;
+    key.validate().map_err(|e| {
+        tr!(
+            "RSA 私钥参数无效：{e}",
+            "Invalid RSA private key parameters: {e}"
+        )
+    })?;
     Ok(key)
 }
 
@@ -452,9 +528,15 @@ fn encrypt_round_trip(key: &PrivateKey, public: &PublicKey) -> Option<Result<Str
     };
     Some(back.and_then(|back| {
         if back == plain {
-            Ok("公钥加密、私钥解密还原一致".into())
+            Ok(tr!(
+                "公钥加密、私钥解密还原一致",
+                "Encrypted with the public key, decrypted with the private key, contents match"
+            ))
         } else {
-            Err("私钥解密结果与原文不一致。".into())
+            Err(tr!(
+                "私钥解密结果与原文不一致。",
+                "The decrypted data does not match the original."
+            ))
         }
     }))
 }
@@ -465,14 +547,18 @@ fn rsa_round_trip(
     plain: &[u8],
 ) -> Result<Vec<u8>, String> {
     let private = rsa_private(pair)?;
-    let public =
-        rsa::RsaPublicKey::try_from(public).map_err(|e| format!("无法读取 RSA 公钥：{e}"))?;
+    let public = rsa::RsaPublicKey::try_from(public).map_err(|e| {
+        tr!(
+            "无法读取 RSA 公钥：{e}",
+            "Could not read the RSA public key: {e}"
+        )
+    })?;
     let cipher = public
         .encrypt(&mut OsRng, rsa::Oaep::new::<sha2::Sha256>(), plain)
-        .map_err(|e| format!("公钥加密失败：{e}"))?;
+        .map_err(|e| tr!("公钥加密失败：{e}", "Public key encryption failed: {e}"))?;
     private
         .decrypt(rsa::Oaep::new::<sha2::Sha256>(), &cipher)
-        .map_err(|e| format!("私钥解密失败：{e}"))
+        .map_err(|e| tr!("私钥解密失败：{e}", "Private key decryption failed: {e}"))
 }
 
 /// Ed25519 can only sign, so the key is mapped to X25519 (as `age` does for
@@ -499,7 +585,7 @@ fn x25519_round_trip(
 
     // Encrypt with the public key only.
     let recipient = ed25519_dalek::VerifyingKey::from_bytes(&public.0)
-        .map_err(|_| "Ed25519 公钥无效。".to_string())?
+        .map_err(|_| tr!("Ed25519 公钥无效。", "Invalid Ed25519 public key."))?
         .to_montgomery();
     let mut ephemeral_secret = [0u8; 32];
     OsRng.fill_bytes(&mut ephemeral_secret);
@@ -525,7 +611,13 @@ fn save_pair(
     public: &PublicKey,
 ) -> Result<(), String> {
     if !dir.exists() {
-        fs::create_dir_all(dir).map_err(|e| format!("无法创建 {}：{e}", dir.display()))?;
+        fs::create_dir_all(dir).map_err(|e| {
+            tr!(
+                "无法创建 {}：{e}",
+                "Could not create {}: {e}",
+                dir.display()
+            )
+        })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -534,7 +626,7 @@ fn save_pair(
     }
     let mut line = public
         .to_openssh()
-        .map_err(|e| format!("编码公钥失败：{e}"))?;
+        .map_err(|e| tr!("编码公钥失败：{e}", "Could not encode the public key: {e}"))?;
     line.push('\n');
     write_new(private_path, private, 0o600)?;
     if let Err(e) = write_new(public_path, line.as_bytes(), 0o644) {
@@ -555,12 +647,22 @@ fn write_new(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
     }
     #[cfg(not(unix))]
     let _ = mode;
-    let mut file = opts
-        .open(path)
-        .map_err(|e| format!("无法写入 {}：{e}", path.display()))?;
+    let mut file = opts.open(path).map_err(|e| {
+        tr!(
+            "无法写入 {}：{e}",
+            "Could not write {}: {e}",
+            path.display()
+        )
+    })?;
     file.write_all(data)
         .and_then(|()| file.sync_all())
-        .map_err(|e| format!("无法写入 {}：{e}", path.display()))
+        .map_err(|e| {
+            tr!(
+                "无法写入 {}：{e}",
+                "Could not write {}: {e}",
+                path.display()
+            )
+        })
 }
 
 /// Name of a key in `dir` with the same public key, if any.
@@ -576,7 +678,12 @@ fn find_key(dir: &Path, name: &str) -> Result<KeyInfo, String> {
     keys::list_keys_in(dir)
         .into_iter()
         .find(|k| k.name == name)
-        .ok_or_else(|| "密钥已保存，但读取失败。".into())
+        .ok_or_else(|| {
+            tr!(
+                "密钥已保存，但读取失败。",
+                "The key was saved but could not be read back."
+            )
+        })
 }
 
 #[cfg(test)]

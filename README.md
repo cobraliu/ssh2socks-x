@@ -5,8 +5,6 @@ English | [简体中文](README.zh-CN.md)
 A small desktop app for SSH tunnels built on your `~/.ssh/config`: one click starts a SOCKS5 proxy (`ssh -D`), a local port forward (`ssh -L`) or a remote port forward (`ssh -R`). It can also edit your SSH config and manage your keys.
 Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Windows, macOS and Linux.
 
-> The user interface is in Chinese.
-
 ## Features
 
 - Reads hosts from `~/.ssh/config`, including `Include` files, with search
@@ -23,19 +21,21 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
   - Local forward: checks whether a forwarded connection is dropped right away (which happens when the server can't reach the target)
   - Remote forward: checks that the local service is running, then connects to `server:port` from this machine
 - Errors show up right away: every log line is timestamped, the list shows the latest error, and a connection that isn't up after 10 seconds is noted in the log. After 45 seconds the attempt is abandoned and retried
-- **SSH config editor** ("SSH 配置" tab):
+- **SSH config editor** ("SSH config" tab):
   - View, add, edit and delete hosts in `~/.ssh/config` (alias, hostname, user, port, identity file)
   - Connect directly, through a jump host (`ProxyJump`), or with a `ProxyCommand`. Templates cover a jump host, a SOCKS5 proxy, an HTTP proxy and ncat
   - Only the edited host's fields are changed. Comments, other options, `Include`/`Match` blocks and line endings are left as they are. The file is backed up to `config.ssh2socks.bak` before each save
   - New hosts are inserted before `Host *` / `Match` so they take effect
-  - "测试连接" (test connection) checks that key-based login works. The config file can also be opened in your system editor
-- **Key management** ("密钥" tab):
+  - "Test connection" checks that key-based login works. The config file can also be opened in your system editor
+- **Key management** ("Keys" tab):
   - Lists `~/.ssh/*.pub` with type, SHA256 fingerprint and comment. View or copy a public key in one click
   - Generate key pairs: Ed25519 or RSA (2048 / 3072 / 4096), with your own file name and comment and an optional passphrase. `ssh-keygen` is not needed
   - Import existing key pairs from files or pasted text. OpenSSH format and RSA PEM (PKCS#1 / PKCS#8) are supported; encrypted private keys need their passphrase
   - Each import is checked step by step, and the result of each step is shown: parse the private key → decrypt it with the passphrase → match it to the public key → sign with the private key and verify with the public key → encrypt with the public key and decrypt with the private key (RSA uses OAEP; Ed25519 is mapped to X25519 for a key exchange)
   - No duplicates: saving is refused if the file name is taken, or if the same key (same fingerprint) already exists under another name. Existing files are never overwritten
   - Private keys are saved with mode `600` (Linux / macOS)
+- English and Chinese interface, including error messages, logs and the tray menu. It follows the system language on first launch; switch with the "EN / 中" button at the top right
+- Light and dark themes: follow the system, or pick one with the theme button (◐ / ☀ / ☾) at the top right. Both choices are remembered
 - Lives in the system tray; closing the window keeps tunnels running
 - All ssh child processes are cleaned up on exit (Job Object on Windows, `PR_SET_PDEATHSIG` on Linux)
 
@@ -76,6 +76,8 @@ Compatible with the old Python version. Stored at:
 - macOS: `~/Library/Application Support/ssh2socks/tunnels.json`
 - Windows: `%APPDATA%\ssh2socks\tunnels.json`
 
+Language and theme are saved in `settings.json` in the same folder.
+
 ## Building
 
 Requires stable Rust, Node.js 20+, and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
@@ -100,7 +102,7 @@ cargo test
 `.github/workflows/ci.yml`:
 
 - Every push and PR: fmt, clippy and tests, then builds on Windows, macOS and Linux and uploads the artifacts
-- Pushing a `v*` tag (e.g. `git tag v0.5.0 && git push origin v0.5.0`) also creates a GitHub Release with all installers attached
+- Pushing a `v*` tag (e.g. `git tag v0.6.0 && git push origin v0.6.0`) also creates a GitHub Release with all installers attached
 
 ## License
 

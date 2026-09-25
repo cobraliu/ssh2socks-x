@@ -20,14 +20,20 @@
       <button class="tab" data-view="config" role="tab">SSH 配置</button>
       <button class="tab" data-view="keys" role="tab">密钥</button>
     </nav>
-    <div class="actions" id="tunnel-actions">
-      <button id="start-all" class="btn">全部启动</button>
-      <button id="stop-all" class="btn">全部停止</button>
-      <button id="add" class="btn primary">＋ 新建隧道</button>
-    </div>
-    <div class="actions" id="key-actions" hidden>
-      <button id="key-import" class="btn">导入密钥…</button>
-      <button id="key-generate" class="btn primary">＋ 生成密钥</button>
+    <div class="bar-end">
+      <div class="actions" id="tunnel-actions">
+        <button id="start-all" class="btn">全部启动</button>
+        <button id="stop-all" class="btn">全部停止</button>
+        <button id="add" class="btn primary">＋ 新建隧道</button>
+      </div>
+      <div class="actions" id="key-actions" hidden>
+        <button id="key-import" class="btn">导入密钥…</button>
+        <button id="key-generate" class="btn primary">＋ 生成密钥</button>
+      </div>
+      <div class="prefs">
+        <button id="lang-toggle" class="btn small" title="切换到英文">EN</button>
+        <button id="theme-toggle" class="btn small icon" title="主题：跟随系统">◐</button>
+      </div>
     </div>
   </header>
 
@@ -39,7 +45,7 @@
       <div id="list" class="tbody"></div>
       <div id="empty" class="empty" hidden>
         <p>还没有隧道</p>
-        <p class="muted">点击右上角「新建隧道」，从 <code>~/.ssh/config</code> 中选择一个连接。</p>
+        <p class="muted" data-i18n-html="empty-tunnels">点击右上角「新建隧道」，从 <code>~/.ssh/config</code> 中选择一个连接。</p>
       </div>
     </section>
 
@@ -113,7 +119,7 @@
       </form>
       <div id="host-empty" class="empty">
         <p>选择左侧的主机进行编辑</p>
-        <p class="muted">或点击「添加」新建一个。保存前会把原文件备份为 <code>config.ssh2socks.bak</code>。</p>
+        <p class="muted" data-i18n-html="empty-host">或点击「添加」新建一个。保存前会把原文件备份为 <code>config.ssh2socks.bak</code>。</p>
       </div>
     </section>
     <datalist id="key-options"></datalist>
@@ -127,8 +133,8 @@
       </div>
       <div id="key-list" class="tbody"></div>
       <div id="key-empty" class="empty" hidden>
-        <p>没有找到公钥（<code>~/.ssh/*.pub</code>）</p>
-        <p class="muted">点右上角「生成密钥」创建一对新密钥，或「导入密钥」使用已有的私钥。</p>
+        <p data-i18n-html="empty-keys-title">没有找到公钥（<code>~/.ssh/*.pub</code>）</p>
+        <p class="muted" data-i18n-html="empty-keys">点右上角「生成密钥」创建一对新密钥，或「导入密钥」使用已有的私钥。</p>
       </div>
     </section>
   </main>
@@ -136,7 +142,7 @@
   <dialog id="editor">
     <form id="editor-form" method="dialog">
       <h2 id="editor-title">新建隧道</h2>
-      <label class="field-label" for="search">选择 <code>~/.ssh/config</code> 中的连接</label>
+      <label class="field-label" for="search" data-i18n-html="pick-host">选择 <code>~/.ssh/config</code> 中的连接</label>
       <input id="search" type="search" placeholder="搜索名称或 IP / 主机名…" autocomplete="off" />
       <ul id="hosts" class="hosts" role="listbox"></ul>
       <div class="grid">
@@ -185,7 +191,7 @@
       <h2 id="key-title"></h2>
       <p id="key-meta" class="muted mono small-text"></p>
       <textarea id="key-text" class="mono key-text" rows="5" readonly spellcheck="false"></textarea>
-      <p class="help">把这行公钥追加到服务器的 <code>~/.ssh/authorized_keys</code>，即可免密登录。</p>
+      <p class="help" data-i18n-html="authorized-keys">把这行公钥追加到服务器的 <code>~/.ssh/authorized_keys</code>，即可免密登录。</p>
       <div class="dialog-actions">
         <button value="close" class="btn">关闭</button>
         <button type="button" id="key-copy" class="btn primary">复制公钥</button>
@@ -219,7 +225,7 @@
         <label for="gen-pass2">确认口令</label>
         <input id="gen-pass2" type="password" autocomplete="new-password" />
         <span></span>
-        <p class="help">设置口令后，本工具建立隧道时无法输入口令，需要先用 <code>ssh-add</code> 把密钥加入 ssh-agent。</p>
+        <p class="help" data-i18n-html="passphrase-help">设置口令后，本工具建立隧道时无法输入口令，需要先用 <code>ssh-add</code> 把密钥加入 ssh-agent。</p>
       </div>
       <p id="gen-error" class="error" hidden></p>
       <div class="dialog-actions">
@@ -264,6 +270,7 @@
 
   <div id="toast" class="toast" hidden></div>
 
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

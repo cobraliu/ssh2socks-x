@@ -85,7 +85,13 @@ impl Doc {
         let text = match fs::read(path) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(format!("读取 {} 失败：{e}", path.display())),
+            Err(e) => {
+                return Err(tr!(
+                    "读取 {} 失败：{e}",
+                    "Could not read {}: {e}",
+                    path.display()
+                ))
+            }
         };
         Ok(Doc::parse(&text))
     }
@@ -261,7 +267,7 @@ fn collect(path: &Path, base: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<
 fn validate(input: &HostInput) -> Result<(), String> {
     let patterns = input.patterns.trim();
     if patterns.is_empty() {
-        return Err("请填写别名（Host）。".into());
+        return Err(tr!("请填写别名（Host）。", "Enter an alias (Host)."));
     }
     if input
         .values()
@@ -269,14 +275,23 @@ fn validate(input: &HostInput) -> Result<(), String> {
         .chain([&patterns])
         .any(|v| v.contains(['\n', '\r']))
     {
-        return Err("字段中不能包含换行。".into());
+        return Err(tr!(
+            "字段中不能包含换行。",
+            "Fields can't contain line breaks."
+        ));
     }
     let port = input.port.trim();
     if !port.is_empty() && port.parse::<u16>().map_or(true, |p| p == 0) {
-        return Err("端口必须在 1–65535 之间。".into());
+        return Err(tr!(
+            "端口必须在 1–65535 之间。",
+            "Ports must be between 1 and 65535."
+        ));
     }
     if !input.proxy_jump.trim().is_empty() && !input.proxy_command.trim().is_empty() {
-        return Err("ProxyJump 和 ProxyCommand 只能选一个。".into());
+        return Err(tr!(
+            "ProxyJump 和 ProxyCommand 只能选一个。",
+            "Use either ProxyJump or ProxyCommand, not both."
+        ));
     }
     Ok(())
 }
@@ -346,7 +361,7 @@ pub fn save_block(config: &Path, input: &HostInput) -> Result<HostBlock, String>
                     Some(split_keyword(doc.lines[s].trim()).1.as_str())
                         == input.original_patterns.as_deref()
                 })
-                .ok_or("配置文件已在别处被修改，请刷新后重试。")?;
+                .ok_or_else(stale)?;
             let host_line = doc.lines[start].clone();
             let lead = &host_line[..host_line.len() - host_line.trim_start().len()];
             if split_keyword(host_line.trim()).1 != patterns {
@@ -378,7 +393,10 @@ pub fn save_block(config: &Path, input: &HostInput) -> Result<HostBlock, String>
                 })
                 .collect();
             if let Some(dup) = concrete_aliases(&patterns).find(|a| existing.contains(*a)) {
-                return Err(format!("主机「{dup}」已存在。"));
+                return Err(tr!(
+                    "主机「{dup}」已存在。",
+                    "Host \"{dup}\" already exists."
+                ));
             }
             let mut doc = Doc::read(config)?;
             let mut block = vec![format!("Host {patterns}")];
@@ -421,7 +439,7 @@ pub fn delete_block(file: &str, line: usize, patterns: &str) -> Result<(), Strin
     let (start, end) = doc
         .block_at(line)
         .filter(|&(s, _)| split_keyword(doc.lines[s].trim()).1 == patterns)
-        .ok_or("配置文件已在别处被修改，请刷新后重试。")?;
+        .ok_or_else(stale)?;
     doc.lines.drain(start..end);
     // Collapse the blank line left between the neighbours.
     if start > 0
@@ -437,8 +455,21 @@ pub fn delete_block(file: &str, line: usize, patterns: &str) -> Result<(), Strin
     write(&path, &doc)
 }
 
+fn stale() -> String {
+    tr!(
+        "配置文件已在别处被修改，请刷新后重试。",
+        "The config file was changed elsewhere. Refresh and try again."
+    )
+}
+
 fn write(path: &Path, doc: &Doc) -> Result<(), String> {
-    let err = |e: std::io::Error| format!("写入 {} 失败：{e}", path.display());
+    let err = |e: std::io::Error| {
+        tr!(
+            "写入 {} 失败：{e}",
+            "Could not write {}: {e}",
+            path.display()
+        )
+    };
     let created = !path.exists();
     if !created {
         let mut backup = path.as_os_str().to_owned();

@@ -134,8 +134,9 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     if rc as isize > 32 {
         Ok(())
     } else {
-        Err(std::io::Error::other(format!(
+        Err(std::io::Error::other(tr!(
             "ShellExecute 返回 {}",
+            "ShellExecute returned {}",
             rc as isize
         )))
     }

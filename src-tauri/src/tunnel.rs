@@ -131,28 +131,35 @@ pub fn ssh_args(t: &Tunnel) -> Vec<String> {
 /// Human-readable forward description, also used in logs.
 pub fn describe(t: &Tunnel) -> String {
     match t.kind {
-        TunnelKind::Socks => format!("SOCKS5 代理 127.0.0.1:{}", t.port),
-        TunnelKind::Local => format!(
+        TunnelKind::Socks => tr!(
+            "SOCKS5 代理 127.0.0.1:{}",
+            "SOCKS5 proxy 127.0.0.1:{}",
+            t.port
+        ),
+        TunnelKind::Local => tr!(
             "127.0.0.1:{} → 服务器上的 {}:{}",
+            "127.0.0.1:{} → {}:{} on the server",
             t.port,
             crate::probe::host_for_url(&t.target_host),
             t.remote_port
         ),
-        TunnelKind::Remote => format!(
+        TunnelKind::Remote => tr!(
             "服务器 0.0.0.0:{} → 本机 127.0.0.1:{}",
-            t.remote_port, t.port
+            "server 0.0.0.0:{} → local 127.0.0.1:{}",
+            t.remote_port,
+            t.port
         ),
     }
 }
 
 /// Extra advice for well-known ssh failures.
-fn hint_for(line: &str) -> Option<&'static str> {
+fn hint_for(line: &str) -> Option<String> {
     if line.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-        Some("提示：服务器主机密钥与 known_hosts 中的记录不一致（服务器重装过，或存在中间人攻击）。确认安全后执行 ssh-keygen -R <主机地址> 删除旧记录再重试。")
+        Some(tr!("提示：服务器主机密钥与 known_hosts 中的记录不一致（服务器重装过，或存在中间人攻击）。确认安全后执行 ssh-keygen -R <主机地址> 删除旧记录再重试。", "Hint: the server's host key does not match the one in known_hosts (the server was reinstalled, or someone is intercepting). Once you are sure it is safe, run ssh-keygen -R <host> to remove the old entry and try again."))
     } else if line.contains("Permission denied (publickey") {
-        Some("提示：需要配置密钥免密登录（例如 ssh-copy-id），本程序无法输入密码。")
+        Some(tr!("提示：需要配置密钥免密登录（例如 ssh-copy-id），本程序无法输入密码。", "Hint: set up key-based login (for example with ssh-copy-id); this app can't enter passwords."))
     } else if line.contains("remote port forwarding failed") {
-        Some("提示：服务器上该端口已被占用，或 sshd 不允许端口转发（AllowTcpForwarding）。")
+        Some(tr!("提示：服务器上该端口已被占用，或 sshd 不允许端口转发（AllowTcpForwarding）。", "Hint: the port is already in use on the server, or sshd does not allow port forwarding (AllowTcpForwarding)."))
     } else {
         None
     }
@@ -270,9 +277,14 @@ impl Manager {
 
     /// Browser address for a port forward.
     pub async fn browser_url(&self, id: &str) -> Result<String, String> {
-        let tunnel = self.tunnel(id).ok_or("隧道不存在")?;
+        let tunnel = self
+            .tunnel(id)
+            .ok_or_else(|| tr!("隧道不存在", "Tunnel not found"))?;
         match tunnel.kind {
-            TunnelKind::Socks => Err("SOCKS 代理没有可打开的网页地址".into()),
+            TunnelKind::Socks => Err(tr!(
+                "SOCKS 代理没有可打开的网页地址",
+                "A SOCKS proxy has no web address to open"
+            )),
             TunnelKind::Local => Ok(format!("http://127.0.0.1:{}/", tunnel.port)),
             TunnelKind::Remote => {
                 let cached = self
@@ -310,7 +322,10 @@ impl Manager {
                     .get(&tunnel.id)
                     .is_some_and(|r| r.state.active())
                 {
-                    return Err("编辑前请先停止该隧道。".into());
+                    return Err(tr!(
+                        "编辑前请先停止该隧道。",
+                        "Stop the tunnel before editing it."
+                    ));
                 }
                 inner.tunnels[i] = tunnel;
             }
@@ -408,8 +423,7 @@ impl Manager {
             let outcome = if tunnel.kind.listens_locally() && !port_free(tunnel.port) {
                 self.note(
                     &id,
-                    &format!(
-                        "本地端口 {} 已被占用（可能是残留的 ssh 进程或其他程序）",
+                    &tr!("本地端口 {} 已被占用（可能是残留的 ssh 进程或其他程序）", "Local port {} is already in use (maybe a leftover ssh process or another program)",
                         tunnel.port
                     ),
                 );
@@ -430,7 +444,10 @@ impl Manager {
                 Outcome::Failed => {
                     let delay = backoff(attempts);
                     attempts += 1;
-                    self.log(&id, &format!("{}s 后自动重连…", delay.as_secs()));
+                    self.log(
+                        &id,
+                        &tr!("{}s 后自动重连…", "Reconnecting in {}s…", delay.as_secs()),
+                    );
                     tokio::select! {
                         _ = sleep(delay) => {}
                         _ = wait_stop(&mut stop) => break,
@@ -456,7 +473,11 @@ impl Manager {
             if port_free(tunnel.port) {
                 self.log(
                     id,
-                    &format!("注意：本机 127.0.0.1:{} 目前没有服务在监听", tunnel.port),
+                    &tr!(
+                        "注意：本机 127.0.0.1:{} 目前没有服务在监听",
+                        "Note: nothing is listening on local 127.0.0.1:{} right now",
+                        tunnel.port
+                    ),
                 );
             }
         }
@@ -476,7 +497,10 @@ impl Manager {
             Err(e) => {
                 self.note(
                     id,
-                    &format!("无法启动 ssh：请确认系统已安装 OpenSSH 客户端（{e}）"),
+                    &tr!(
+                        "无法启动 ssh：请确认系统已安装 OpenSSH 客户端（{e}）",
+                        "Could not start ssh. Make sure the OpenSSH client is installed ({e})"
+                    ),
                 );
                 return Outcome::Fatal;
             }
@@ -503,7 +527,7 @@ impl Manager {
                     } else if !line.trim().is_empty() {
                         me.note(&id, line);
                         if let Some(hint) = hint_for(line) {
-                            me.log(&id, hint);
+                            me.log(&id, &hint);
                         }
                     }
                     buf.clear();
@@ -545,8 +569,7 @@ impl Manager {
             if waited >= CONNECT_DEADLINE {
                 self.note(
                     id,
-                    &format!(
-                        "等待 {}s 仍未连上（网络不通、跳板机/ProxyCommand 卡住或服务器无响应），结束本次尝试",
+                    &tr!("等待 {}s 仍未连上（网络不通、跳板机/ProxyCommand 卡住或服务器无响应），结束本次尝试", "Still not connected after {}s (network unreachable, jump host / ProxyCommand stuck, or no response from the server); giving up on this attempt",
                         waited.as_secs()
                     ),
                 );
@@ -555,7 +578,11 @@ impl Manager {
             }
             self.note(
                 id,
-                &format!("仍在等待 ssh 建立连接…（已 {}s）", waited.as_secs()),
+                &tr!(
+                    "仍在等待 ssh 建立连接…（已 {}s）",
+                    "Still waiting for ssh to connect… ({}s so far)",
+                    waited.as_secs()
+                ),
             );
         };
         match event {
@@ -566,7 +593,7 @@ impl Manager {
 
         *attempts = 0;
         self.set_state(id, TunnelState::Connected);
-        self.log(id, &format!("已就绪：{}", describe(tunnel)));
+        self.log(id, &tr!("已就绪：{}", "Ready: {}", describe(tunnel)));
 
         // Phase 2: connected; probe periodically until ssh exits or we stop.
         let mut ticker = tokio::time::interval(PROBE_INTERVAL);
@@ -592,7 +619,7 @@ impl Manager {
                 .map_or_else(|| "signal".to_string(), |c| c.to_string()),
             Err(e) => e.to_string(),
         };
-        let line = format!("ssh 进程退出 (code={code})");
+        let line = tr!("ssh 进程退出 (code={code})", "ssh exited (code={code})");
         self.log(id, &line);
         let mut inner = self.lock();
         if let Some(rt) = inner.runtimes.get_mut(id) {
@@ -647,9 +674,9 @@ impl Manager {
             };
             if changed {
                 let line = match (result.ok, result.latency_ms) {
-                    (true, Some(ms)) => format!("探测：通（{ms:.0}ms）"),
-                    (true, None) => "探测：通".to_string(),
-                    (false, _) => format!("探测失败：{}", result.message),
+                    (true, Some(ms)) => tr!("探测：通（{ms:.0}ms）", "Probe: up ({ms:.0}ms)"),
+                    (true, None) => tr!("探测：通", "Probe: up"),
+                    (false, _) => tr!("探测失败：{}", "Probe failed: {}", result.message),
                 };
                 me.log(&id, &line);
             }
@@ -745,7 +772,14 @@ fn conflict(tunnels: &[Tunnel], tunnel: &Tunnel) -> Option<String> {
     if tunnel.kind.listens_locally() {
         others
             .find(|t| t.kind.listens_locally() && t.port == tunnel.port)
-            .map(|o| format!("本地端口 {} 已被隧道「{}」使用", tunnel.port, o.name))
+            .map(|o| {
+                tr!(
+                    "本地端口 {} 已被隧道「{}」使用",
+                    "Local port {} is already used by tunnel \"{}\"",
+                    tunnel.port,
+                    o.name
+                )
+            })
     } else {
         others
             .find(|t| {
@@ -754,9 +788,11 @@ fn conflict(tunnels: &[Tunnel], tunnel: &Tunnel) -> Option<String> {
                     && t.remote_port == tunnel.remote_port
             })
             .map(|o| {
-                format!(
+                tr!(
                     "服务器端口 {} 已被隧道「{}」使用",
-                    tunnel.remote_port, o.name
+                    "Server port {} is already used by tunnel \"{}\"",
+                    tunnel.remote_port,
+                    o.name
                 )
             })
     }
@@ -773,7 +809,7 @@ fn view_of(inner: &Inner, t: &Tunnel) -> TunnelView {
 }
 
 fn persist(tunnels: &[Tunnel]) -> Result<(), String> {
-    store::save(tunnels).map_err(|e| format!("保存配置失败：{e}"))
+    store::save(tunnels).map_err(|e| tr!("保存配置失败：{e}", "Could not save settings: {e}"))
 }
 
 #[cfg(test)]

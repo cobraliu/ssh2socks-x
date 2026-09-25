@@ -35,12 +35,12 @@ function mappingOf(v) {
   switch (v.kind) {
     case "local":
       return [`${v.port} → ${hostPort(v.target_host, v.remote_port)}`,
-        `本机 127.0.0.1:${v.port} → 服务器上的 ${hostPort(v.target_host, v.remote_port)}`];
+        t("本机 127.0.0.1:{port} → 服务器上的 {target}", { port: v.port, target: hostPort(v.target_host, v.remote_port) })];
     case "remote":
-      return [`:${v.remote_port} → 本机:${v.port}`,
-        `服务器 0.0.0.0:${v.remote_port} → 本机 127.0.0.1:${v.port}`];
+      return [t(":{rport} → 本机:{port}", { rport: v.remote_port, port: v.port }),
+        t("服务器 0.0.0.0:{rport} → 本机 127.0.0.1:{port}", { rport: v.remote_port, port: v.port })];
     default:
-      return [`127.0.0.1:${v.port}`, `SOCKS5 代理地址：127.0.0.1:${v.port}`];
+      return [`127.0.0.1:${v.port}`, t("SOCKS5 代理地址：127.0.0.1:{port}", { port: v.port })];
   }
 }
 
@@ -80,15 +80,15 @@ const isActive = (v) => v.state === "connecting" || v.state === "connected";
 function healthOf(v) {
   switch (v.state) {
     case "connecting":
-      return v.detail ? [v.detail, "warn"] : ["连接中…", ""];
+      return v.detail ? [v.detail, "warn"] : [t("连接中…"), ""];
     case "connected":
-      if (!v.probe) return ["检测中…", ""];
-      if (!v.probe.ok) return [`不通 · ${v.probe.message}`, "bad"];
+      if (!v.probe) return [t("检测中…"), ""];
+      if (!v.probe.ok) return [t("不通 · {message}", { message: v.probe.message }), "bad"];
       return v.probe.latency_ms == null
-        ? ["通", "ok"]
-        : [`通 ${Math.round(v.probe.latency_ms)}ms`, "ok"];
+        ? [t("通"), "ok"]
+        : [t("通 {ms}ms", { ms: Math.round(v.probe.latency_ms) }), "ok"];
     case "error":
-      return [v.detail ? `错误 · ${v.detail}` : "错误", "bad"];
+      return [v.detail ? t("错误 · {detail}", { detail: v.detail }) : t("错误"), "bad"];
     default:
       return ["—", ""];
   }
@@ -108,15 +108,14 @@ function buildRow(id) {
 
   const ops = el("span", "ops");
   const toggle = el("button", "btn small toggle");
-  const open = el("button", "btn small open", "打开");
-  open.title = "在浏览器中打开";
+  const open = el("button", "btn small open");
   open.addEventListener("click", async (e) => {
     e.stopPropagation();
     const url = await call("open_in_browser", { id });
-    toast(`已在浏览器打开 ${url}`);
+    toast(t("已在浏览器打开 {url}", { url }));
   });
-  const edit = el("button", "btn small", "编辑");
-  const del = el("button", "btn small danger", "删除");
+  const edit = el("button", "btn small edit");
+  const del = el("button", "btn small danger delete");
   toggle.addEventListener("click", (e) => {
     e.stopPropagation();
     const v = tunnels.get(id);
@@ -141,12 +140,12 @@ function updateRow(v) {
   const row = rows.get(v.id);
   if (!row) return;
   row.querySelector(".dot").className = `dot ${v.state}`;
-  row.querySelector(".state-text").textContent = STATE_TEXT[v.state];
+  row.querySelector(".state-text").textContent = t(STATE_TEXT[v.state]);
   row.querySelector(".name").textContent = v.name;
   row.querySelector(".host").textContent = v.host;
   const [mapText, mapTitle] = mappingOf(v);
   const addr = row.querySelector(".addr");
-  addr.replaceChildren(el("span", "tag", KINDS[v.kind]?.tag ?? v.kind), el("span", "addr-text", mapText));
+  addr.replaceChildren(el("span", "tag", t(KINDS[v.kind]?.tag ?? v.kind)), el("span", "addr-text", mapText));
   addr.title = mapTitle;
   const open = row.querySelector(".open");
   open.hidden = v.kind === "socks";
@@ -156,7 +155,11 @@ function updateRow(v) {
   health.textContent = text;
   health.title = text;
   health.className = `cell health ${cls}`;
-  row.querySelector(".toggle").textContent = isActive(v) ? "停止" : "连接";
+  row.querySelector(".toggle").textContent = isActive(v) ? t("停止") : t("连接");
+  open.textContent = t("打开");
+  open.title = t("在浏览器中打开");
+  row.querySelector(".edit").textContent = t("编辑");
+  row.querySelector(".delete").textContent = t("删除");
 }
 
 async function reload() {
@@ -189,7 +192,7 @@ async function select(id) {
   const log = $("log");
   if (!id) {
     $("log-title").textContent = "";
-    log.replaceChildren(el("span", "muted", "选择上方隧道查看其 ssh 日志…"));
+    log.replaceChildren(el("span", "muted", t("选择上方隧道查看其 ssh 日志…")));
     return;
   }
   $("log-title").textContent = `· ${tunnels.get(id)?.name ?? ""}`;
@@ -220,9 +223,9 @@ const currentKind = () => document.querySelector('input[name="kind"]:checked')?.
 function applyKind() {
   const kind = currentKind();
   const k = KINDS[kind];
-  $("port-label").textContent = k.portLabel;
-  $("rport-label").textContent = k.rportLabel ?? "";
-  $("kind-help").textContent = k.help;
+  $("port-label").textContent = t(k.portLabel);
+  $("rport-label").textContent = k.rportLabel ? t(k.rportLabel) : "";
+  $("kind-help").textContent = t(k.help);
   for (const node of document.querySelectorAll("#editor [data-kinds]")) {
     node.hidden = !node.dataset.kinds.split(" ").includes(kind);
   }
@@ -244,14 +247,14 @@ function renderHosts() {
   const list = $("hosts");
   list.replaceChildren();
   if (!hosts.length) {
-    list.append(el("li", "placeholder", "未在 ~/.ssh/config 中找到主机"));
+    list.append(el("li", "placeholder", t("未在 ~/.ssh/config 中找到主机")));
     return;
   }
   const shown = hosts.filter(
     (h) => !q || h.alias.toLowerCase().includes(q) || h.hostname.toLowerCase().includes(q)
   );
   if (!shown.length) {
-    list.append(el("li", "placeholder", "没有匹配的主机"));
+    list.append(el("li", "placeholder", t("没有匹配的主机")));
     return;
   }
   for (const h of shown) {
@@ -273,11 +276,11 @@ function renderHosts() {
 
 async function openEditor(view) {
   if (view && isActive(view)) {
-    toast("编辑前请先停止该隧道。");
+    toast(t("编辑前请先停止该隧道。"));
     return;
   }
   editing = view ?? null;
-  $("editor-title").textContent = view ? "编辑隧道" : "新建隧道";
+  $("editor-title").textContent = view ? t("编辑隧道") : t("新建隧道");
   $("editor-error").hidden = true;
   $("search").value = "";
   const kind = view ? view.kind : "socks";
@@ -313,7 +316,7 @@ async function submitEditor() {
   const port = Number($("port").value);
   const remotePort = kind === "socks" ? 0 : Number($("rport").value);
   if (!valid(port) || (kind !== "socks" && !valid(remotePort))) {
-    showEditorError("端口必须在 1–65535 之间。");
+    showEditorError(t("端口必须在 1–65535 之间。"));
     return;
   }
   const input = {
@@ -351,7 +354,7 @@ function ask(title, text, okLabel) {
 }
 
 async function confirmDelete(view) {
-  if (!(await ask("删除隧道", `确定删除「${view.name}」吗？运行中的隧道会被立即断开。`, "删除"))) return;
+  if (!(await ask(t("删除隧道"), t("确定删除「{name}」吗？运行中的隧道会被立即断开。", { name: view.name }), t("删除")))) return;
   await call("delete_tunnel", { id: view.id });
   await reload();
 }
@@ -361,7 +364,7 @@ let currentView = "tunnels";
 
 async function showView(name) {
   if (name === currentView) return;
-  if (currentView === "config" && hostDirty && !(await ask("放弃修改", "当前主机的修改还没有保存，确定离开吗？", "放弃修改"))) return;
+  if (currentView === "config" && hostDirty && !(await ask(t("放弃修改"), t("当前主机的修改还没有保存，确定离开吗？"), t("放弃修改")))) return;
   if (currentView === "config") hostDirty = false;
   currentView = name;
   for (const tab of document.querySelectorAll(".tab")) tab.classList.toggle("active", tab.dataset.view === name);
@@ -392,7 +395,7 @@ async function copyText(text) {
 }
 
 async function copyKey(key) {
-  toast((await copyText(key.public_key)) ? `已复制 ${key.name} 的公钥` : "复制失败，请手动选中复制");
+  toast((await copyText(key.public_key)) ? t("已复制 {name} 的公钥", { name: key.name }) : t("复制失败，请手动选中复制"));
 }
 
 // ---- keys view -----------------------------------------------------------------
@@ -404,8 +407,8 @@ async function loadKeys() {
   list.replaceChildren();
   for (const key of keys) {
     const row = el("div", "row key-row");
-    const view = el("button", "btn small", "查看");
-    const copy = el("button", "btn small primary", "复制公钥");
+    const view = el("button", "btn small", t("查看"));
+    const copy = el("button", "btn small primary", t("复制公钥"));
     view.addEventListener("click", () => showKey(key));
     copy.addEventListener("click", () => copyKey(key));
     const ops = el("span", "ops");
@@ -437,10 +440,10 @@ const NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
 /// Client-side name check; the backend repeats it against the real files.
 function nameProblem(name) {
-  if (!name) return "请填写文件名。";
-  if (!NAME_RE.test(name)) return "文件名只能包含字母、数字、点、下划线和减号，且不能以点开头。";
-  if (name.endsWith(".pub")) return "文件名不需要带 .pub，公钥会自动保存为「文件名.pub」。";
-  if (keys.some((k) => k.name === name)) return `「${name}」已存在，请换一个文件名。`;
+  if (!name) return t("请填写文件名。");
+  if (!NAME_RE.test(name)) return t("文件名只能包含字母、数字、点、下划线和减号，且不能以点开头。");
+  if (name.endsWith(".pub")) return t("文件名不需要带 .pub，公钥会自动保存为「文件名.pub」。");
+  if (keys.some((k) => k.name === name)) return t("「{name}」已存在，请换一个文件名。", { name });
   return "";
 }
 
@@ -474,7 +477,7 @@ async function onGenKindChange() {
 
 function onGenNameInput() {
   const name = $("gen-name").value.trim();
-  $("gen-where").textContent = name ? `将创建 ~/.ssh/${name} 和 ${name}.pub` : "";
+  $("gen-where").textContent = name ? t("将创建 ~/.ssh/{name} 和 {name}.pub", { name }) : "";
   showError("gen-error", name ? nameProblem(name) : "");
 }
 
@@ -482,11 +485,11 @@ async function submitGenerate() {
   const name = $("gen-name").value.trim();
   const problem = nameProblem(name);
   if (problem) return showError("gen-error", problem);
-  if ($("gen-pass").value !== $("gen-pass2").value) return showError("gen-error", "两次输入的口令不一致。");
+  if ($("gen-pass").value !== $("gen-pass2").value) return showError("gen-error", t("两次输入的口令不一致。"));
   const kind = genKind();
   const ok = $("gen-ok");
   ok.disabled = true;
-  ok.textContent = "生成中…";
+  ok.textContent = t("生成中…");
   try {
     const key = await invoke("generate_key", {
       input: {
@@ -499,13 +502,13 @@ async function submitGenerate() {
     });
     $("gen-dialog").close();
     await loadKeys();
-    toast(`已生成 ${key.name}`);
+    toast(t("已生成 {name}", { name: key.name }));
     showKey(key);
   } catch (err) {
     showError("gen-error", String(err));
   } finally {
     ok.disabled = false;
-    ok.textContent = "生成";
+    ok.textContent = t("生成");
   }
 }
 
@@ -524,7 +527,7 @@ function resetImportCheck() {
   $("imp-summary").hidden = true;
   showError("imp-error", "");
   const name = $("imp-name").value.trim();
-  $("imp-where").textContent = name ? `将保存为 ~/.ssh/${name} 和 ${name}.pub` : "";
+  $("imp-where").textContent = name ? t("将保存为 ~/.ssh/{name} 和 {name}.pub", { name }) : "";
 }
 
 function importInput() {
@@ -539,7 +542,7 @@ function importInput() {
 async function pickImportFiles(files) {
   for (const file of files) {
     if (file.size > 64 * 1024) {
-      showError("imp-error", `${file.name} 太大了，不像是密钥文件。`);
+      showError("imp-error", t("{name} 太大了，不像是密钥文件。", { name: file.name }));
       continue;
     }
     const text = await file.text();
@@ -561,7 +564,7 @@ async function checkImport() {
   resetImportCheck();
   const btn = $("imp-check");
   btn.disabled = true;
-  btn.textContent = "校验中…";
+  btn.textContent = t("校验中…");
   try {
     const report = await invoke("check_key_import", { input });
     const list = $("imp-steps");
@@ -588,7 +591,7 @@ async function checkImport() {
     return false;
   } finally {
     btn.disabled = false;
-    btn.textContent = "校验";
+    btn.textContent = t("校验");
   }
 }
 
@@ -598,7 +601,7 @@ async function submitImport() {
     const key = await invoke("import_key", { input: importInput() });
     $("import-dialog").close();
     await loadKeys();
-    toast(`已导入 ${key.name}`);
+    toast(t("已导入 {name}", { name: key.name }));
     showKey(key);
   } catch (err) {
     showError("imp-error", String(err));
@@ -618,7 +621,7 @@ const concreteAliases = (patterns) => patterns.split(/\s+/).filter((a) => a && !
 function whereOf(b) {
   const dir = sshDir();
   const file = b.file === configPath ? "config" : b.file.startsWith(dir) ? b.file.slice(dir.length + 1) : b.file;
-  return `~/.ssh/${file.replace(/\\/g, "/")} 第 ${b.line + 1} 行`;
+  return t("~/.ssh/{file} 第 {line} 行", { file: file.replace(/\\/g, "/"), line: b.line + 1 });
 }
 
 async function loadConfig(select) {
@@ -658,14 +661,14 @@ function renderBlocks() {
     (b) => !q || b.patterns.toLowerCase().includes(q) || b.hostname.toLowerCase().includes(q)
   );
   if (!shown.length) {
-    list.append(el("li", "placeholder", blocks.length ? "没有匹配的主机" : "~/.ssh/config 中还没有主机"));
+    list.append(el("li", "placeholder", blocks.length ? t("没有匹配的主机") : t("~/.ssh/config 中还没有主机")));
     return;
   }
   for (const b of shown) {
     const li = el("li");
     const name = el("div", "b-name");
     name.append(el("span", null, b.patterns));
-    if (b.proxy_jump) name.append(el("span", "tag", "跳板"));
+    if (b.proxy_jump) name.append(el("span", "tag", t("跳板")));
     if (b.proxy_command) name.append(el("span", "tag", "ProxyCommand"));
     const sub = [b.user && `${b.user}@`, b.hostname || "", b.port && `:${b.port}`].join("");
     li.append(name, el("div", "b-sub", sub || (b.file === configPath ? "—" : whereOf(b))));
@@ -679,7 +682,7 @@ function renderBlocks() {
 let isNewHost = false;
 
 async function selectBlock(b) {
-  if (hostDirty && !(await ask("放弃修改", "当前主机的修改还没有保存，确定切换吗？", "放弃修改"))) return;
+  if (hostDirty && !(await ask(t("放弃修改"), t("当前主机的修改还没有保存，确定切换吗？"), t("放弃修改")))) return;
   selectedBlock = b;
   isNewHost = !b;
   renderBlocks();
@@ -699,8 +702,7 @@ function fillHostForm(b) {
   $("host-empty").hidden = true;
   $("host-error").hidden = true;
   $("host-test-out").hidden = true;
-  $("host-form-title").textContent = b ? `编辑主机 ${b.patterns}` : "新建主机";
-  $("host-form-where").textContent = b ? `位于 ${whereOf(b)}` : "将添加到 ~/.ssh/config（放在 Host * 之前）";
+  hostFormHeader(b);
   $("h-patterns").value = b?.patterns ?? "";
   $("h-hostname").value = b?.hostname ?? "";
   $("h-user").value = b?.user ?? "";
@@ -718,6 +720,11 @@ function fillHostForm(b) {
   $("host-delete").disabled = !b;
   hostDirty = false;
   if (!b) $("h-patterns").focus();
+}
+
+function hostFormHeader(b) {
+  $("host-form-title").textContent = b ? t("编辑主机 {name}", { name: b.patterns }) : t("新建主机");
+  $("host-form-where").textContent = b ? t("位于 {where}", { where: whereOf(b) }) : t("将添加到 ~/.ssh/config（放在 Host * 之前）");
 }
 
 function closeHostForm() {
@@ -747,8 +754,8 @@ async function saveHost() {
     proxy_jump: via === "jump" ? $("h-jump").value : "",
     proxy_command: via === "command" ? $("h-command").value : "",
   };
-  if (via === "jump" && !input.proxy_jump.trim()) return showHostError("请填写跳板机。");
-  if (via === "command" && !input.proxy_command.trim()) return showHostError("请填写 ProxyCommand。");
+  if (via === "jump" && !input.proxy_jump.trim()) return showHostError(t("请填写跳板机。"));
+  if (via === "command" && !input.proxy_command.trim()) return showHostError(t("请填写 ProxyCommand。"));
   let saved;
   try {
     saved = await invoke("save_ssh_host", { input });
@@ -758,33 +765,33 @@ async function saveHost() {
   }
   hostDirty = false;
   isNewHost = false;
-  toast("已保存到 ~/.ssh/config");
+  toast(t("已保存到 ~/.ssh/config"));
   await loadConfig(saved);
 }
 
 async function deleteHost() {
   const b = selectedBlock;
-  if (!b || !(await ask("删除主机", `确定从 ssh 配置中删除「${b.patterns}」吗？`, "删除"))) return;
+  if (!b || !(await ask(t("删除主机"), t("确定从 ssh 配置中删除「{name}」吗？", { name: b.patterns }), t("删除")))) return;
   await call("delete_ssh_host", { file: b.file, line: b.line, patterns: b.patterns });
   selectedBlock = null;
   closeHostForm();
-  toast("已删除");
+  toast(t("已删除"));
   await loadConfig();
 }
 
 async function testHost() {
   const alias = selectedBlock && concreteAliases(selectedBlock.patterns)[0];
-  if (!alias) return toast("通配符主机无法直接测试");
-  if (hostDirty) return toast("请先保存修改再测试");
+  if (!alias) return toast(t("通配符主机无法直接测试"));
+  if (hostDirty) return toast(t("请先保存修改再测试"));
   const out = $("host-test-out");
   out.hidden = false;
   out.className = "test-out";
-  out.textContent = `正在测试 ssh ${alias} …`;
+  out.textContent = t("正在测试 ssh {alias} …", { alias });
   $("host-test").disabled = true;
   try {
     const r = await call("test_ssh_host", { alias });
     out.className = `test-out ${r.ok ? "ok" : "bad"}`;
-    out.textContent = `${r.ok ? "✓ 连接成功" : "✗ 连接失败"}\n${r.output}`;
+    out.textContent = `${r.ok ? t("✓ 连接成功") : t("✗ 连接失败")}\n${r.output}`;
   } finally {
     $("host-test").disabled = false;
   }
@@ -866,4 +873,67 @@ listen("tunnel-log", ({ payload }) => {
   if (payload.id === selectedId) appendLog(payload.line);
 });
 
-reload();
+// ---- language + theme ------------------------------------------------------------
+const prefs = { lang: "zh", theme: "system" };
+const THEMES = {
+  system: ["◐", "主题：跟随系统"],
+  light: ["☀", "主题：浅色"],
+  dark: ["☾", "主题：深色"],
+};
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (prefs.theme === "system") delete root.dataset.theme;
+  else root.dataset.theme = prefs.theme;
+  const [icon, title] = THEMES[prefs.theme];
+  $("theme-toggle").textContent = icon;
+  $("theme-toggle").title = t(title);
+}
+
+function applyLang() {
+  setUiLang(prefs.lang);
+  $("lang-toggle").textContent = prefs.lang === "en" ? "中" : "EN";
+  $("lang-toggle").title = prefs.lang === "en" ? t("切换到中文") : t("切换到英文");
+  applyTheme();
+  // Text that code filled in with parameters.
+  for (const v of tunnels.values()) updateRow(v);
+  if (!selectedId) select(null);
+  if (keys.length) loadKeys();
+  renderBlocks();
+  if (!$("host-form").hidden) hostFormHeader(selectedBlock);
+}
+
+async function savePrefs() {
+  try {
+    await invoke("set_prefs", { prefs });
+  } catch (err) {
+    toast(String(err));
+  }
+}
+
+async function initPrefs() {
+  try {
+    const saved = await invoke("get_prefs");
+    prefs.lang = saved.lang || (/^zh\b/i.test(navigator.language) ? "zh" : "en");
+    prefs.theme = THEMES[saved.theme] ? saved.theme : "system";
+    applyLang();
+    // Tell the backend (messages, tray menu, window theme) what the UI chose.
+    if (!saved.lang || !saved.theme) await savePrefs();
+  } finally {
+    document.documentElement.dataset.ready = "";
+  }
+}
+
+$("lang-toggle").addEventListener("click", () => {
+  prefs.lang = prefs.lang === "en" ? "zh" : "en";
+  applyLang();
+  savePrefs();
+});
+$("theme-toggle").addEventListener("click", () => {
+  const order = Object.keys(THEMES);
+  prefs.theme = order[(order.indexOf(prefs.theme) + 1) % order.length];
+  applyTheme();
+  savePrefs();
+});
+
+initPrefs().finally(reload);

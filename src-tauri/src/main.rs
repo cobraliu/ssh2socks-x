@@ -1,6 +1,8 @@
 // No console window next to the GUI on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod keygen;
 mod keys;
 mod models;
@@ -69,20 +71,29 @@ fn save_tunnel(mgr: Mgr, input: TunnelInput) -> Result<(), String> {
     let name = input.name.trim().to_string();
     let host = input.host.trim().to_string();
     if host.is_empty() {
-        return Err("请从列表中选择一个 ssh 连接。".into());
+        return Err(tr!(
+            "请从列表中选择一个 ssh 连接。",
+            "Choose an ssh host from the list."
+        ));
     }
     if name.is_empty() {
-        return Err("请填写隧道名称。".into());
+        return Err(tr!("请填写隧道名称。", "Enter a tunnel name."));
     }
     if input.port == 0 || (input.kind != TunnelKind::Socks && input.remote_port == 0) {
-        return Err("端口必须在 1–65535 之间。".into());
+        return Err(tr!(
+            "端口必须在 1–65535 之间。",
+            "Ports must be between 1 and 65535."
+        ));
     }
     let target_host = match input.target_host.trim() {
         "" => "127.0.0.1".to_string(),
         h => h.trim_start_matches('[').trim_end_matches(']').to_string(),
     };
     if target_host.contains(char::is_whitespace) {
-        return Err("目标地址格式不正确。".into());
+        return Err(tr!(
+            "目标地址格式不正确。",
+            "The target address is not valid."
+        ));
     }
     let probe_url = match input.probe_url.trim() {
         "" => DEFAULT_PROBE_URL.to_string(),
@@ -129,7 +140,8 @@ fn stop_all(mgr: Mgr) {
 #[tauri::command]
 async fn open_in_browser(mgr: Mgr<'_>, id: String) -> Result<String, String> {
     let url = mgr.browser_url(&id).await?;
-    platform::open_url(&url).map_err(|e| format!("无法打开浏览器：{e}"))?;
+    platform::open_url(&url)
+        .map_err(|e| tr!("无法打开浏览器：{e}", "Could not open the browser: {e}"))?;
     Ok(url)
 }
 
@@ -139,6 +151,10 @@ fn tunnel_logs(mgr: Mgr, id: String) -> Vec<String> {
 }
 
 // ---- ssh keys + config ----------------------------------------------------
+
+fn no_home() -> String {
+    tr!("找不到用户主目录", "Could not find the home directory")
+}
 
 #[tauri::command]
 fn list_keys() -> Vec<keys::KeyInfo> {
@@ -155,7 +171,7 @@ struct KeyDefaults {
 /// usual `user@host` comment.
 #[tauri::command]
 fn key_defaults(kind: String) -> Result<KeyDefaults, String> {
-    let dir = ssh_config::ssh_dir().ok_or("找不到用户主目录")?;
+    let dir = ssh_config::ssh_dir().ok_or_else(no_home)?;
     Ok(KeyDefaults {
         name: keygen::suggest_name(
             &dir,
@@ -174,7 +190,7 @@ fn key_defaults(kind: String) -> Result<KeyDefaults, String> {
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce(&std::path::Path) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    let dir = ssh_config::ssh_dir().ok_or("找不到用户主目录")?;
+    let dir = ssh_config::ssh_dir().ok_or_else(no_home)?;
     tauri::async_runtime::spawn_blocking(move || f(&dir))
         .await
         .map_err(|e| e.to_string())?
@@ -213,7 +229,7 @@ fn list_ssh_hosts() -> SshConfigView {
 
 #[tauri::command]
 fn save_ssh_host(input: ssh_edit::HostInput) -> Result<ssh_edit::HostBlock, String> {
-    let config = ssh_edit::main_config().ok_or("找不到用户主目录")?;
+    let config = ssh_edit::main_config().ok_or_else(no_home)?;
     ssh_edit::save_block(&config, &input)
 }
 
@@ -249,11 +265,14 @@ async fn test_ssh_host(alias: String) -> TestResult {
     match tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output()).await {
         Err(_) => TestResult {
             ok: false,
-            output: "30 秒内没有完成登录（网络不通，或 ProxyCommand / 跳板机卡住）".into(),
+            output: tr!(
+                "30 秒内没有完成登录（网络不通，或 ProxyCommand / 跳板机卡住）",
+                "Login did not finish within 30 seconds (network unreachable, or the ProxyCommand / jump host is stuck)"
+            ),
         },
         Ok(Err(e)) => TestResult {
             ok: false,
-            output: format!("无法启动 ssh：{e}"),
+            output: tr!("无法启动 ssh：{e}", "Could not start ssh: {e}"),
         },
         Ok(Ok(out)) => {
             let text = platform::decode(&out.stderr);
@@ -261,7 +280,7 @@ async fn test_ssh_host(alias: String) -> TestResult {
             TestResult {
                 ok,
                 output: match (ok, text.trim()) {
-                    (true, "") => "登录成功".into(),
+                    (true, "") => tr!("登录成功", "Login succeeded"),
                     (_, t) => t.to_string(),
                 },
             }
@@ -271,11 +290,42 @@ async fn test_ssh_host(alias: String) -> TestResult {
 
 #[tauri::command]
 fn open_ssh_config() -> Result<(), String> {
-    let path = ssh_edit::main_config().ok_or("找不到用户主目录")?;
+    let path = ssh_edit::main_config().ok_or_else(no_home)?;
     if !path.exists() {
-        return Err("~/.ssh/config 还不存在，先添加一个主机即可创建。".into());
+        return Err(tr!(
+            "~/.ssh/config 还不存在，先添加一个主机即可创建。",
+            "~/.ssh/config does not exist yet. Add a host to create it."
+        ));
     }
-    platform::open_in_editor(&path).map_err(|e| format!("无法打开编辑器：{e}"))
+    platform::open_in_editor(&path)
+        .map_err(|e| tr!("无法打开编辑器：{e}", "Could not open an editor: {e}"))
+}
+
+// ---- language + theme -------------------------------------------------------
+
+#[tauri::command]
+fn get_prefs() -> i18n::Prefs {
+    i18n::load_prefs()
+}
+
+#[tauri::command]
+fn set_prefs(app: AppHandle, prefs: i18n::Prefs) -> Result<(), String> {
+    apply_prefs(&app, &prefs);
+    i18n::save_prefs(&prefs)
+}
+
+fn apply_prefs(app: &AppHandle, prefs: &i18n::Prefs) {
+    if !prefs.lang.is_empty() {
+        i18n::set_english(prefs.lang == "en");
+    }
+    relabel_tray(app);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_theme(match prefs.theme.as_str() {
+            "light" => Some(tauri::Theme::Light),
+            "dark" => Some(tauri::Theme::Dark),
+            _ => None,
+        });
+    }
 }
 
 // ---- tray + window ------------------------------------------------------
@@ -283,7 +333,10 @@ fn open_ssh_config() -> Result<(), String> {
 pub fn update_tray_tooltip(app: &AppHandle, mgr: &Manager) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let (connected, total) = mgr.connected_summary();
-        let _ = tray.set_tooltip(Some(format!("ssh2socks — {connected}/{total} 已连接")));
+        let _ = tray.set_tooltip(Some(tr!(
+            "ssh2socks — {connected}/{total} 已连接",
+            "ssh2socks — {connected}/{total} connected"
+        )));
     }
 }
 
@@ -295,14 +348,42 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// Tray menu entries, kept so their text can follow the language.
+struct TrayMenu([MenuItem<tauri::Wry>; 4]);
+
+fn tray_labels() -> [String; 4] {
+    [
+        tr!("显示主界面", "Show window"),
+        tr!("全部启动", "Start all"),
+        tr!("全部停止", "Stop all"),
+        tr!("退出", "Quit"),
+    ]
+}
+
+fn relabel_tray(app: &AppHandle) {
+    if let Some(menu) = app.try_state::<TrayMenu>() {
+        for (item, label) in menu.0.iter().zip(tray_labels()) {
+            let _ = item.set_text(label);
+        }
+    }
+    update_tray_tooltip(app, &app.state::<Arc<Manager>>());
+}
+
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
-    let start = MenuItem::with_id(app, "start_all", "全部启动", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop_all", "全部停止", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let [show, start, stop, quit] = tray_labels();
+    let show = MenuItem::with_id(app, "show", show, true, None::<&str>)?;
+    let start = MenuItem::with_id(app, "start_all", start, true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop_all", stop, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", quit, true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &sep1, &start, &stop, &sep2, &quit])?;
+    app.manage(TrayMenu([
+        show.clone(),
+        start.clone(),
+        stop.clone(),
+        quit.clone(),
+    ]));
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("ssh2socks")
@@ -343,8 +424,13 @@ fn main() {
         .setup(|app| {
             let mgr = Manager::new(Some(app.handle().clone()), store::load());
             app.manage(mgr);
+            let prefs = i18n::load_prefs();
+            if !prefs.lang.is_empty() {
+                i18n::set_english(prefs.lang == "en");
+            }
             let tray_ok = build_tray(app).is_ok();
             app.manage(TrayReady(tray_ok));
+            apply_prefs(app.handle(), &prefs);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -379,6 +465,8 @@ fn main() {
             delete_ssh_host,
             test_ssh_host,
             open_ssh_config,
+            get_prefs,
+            set_prefs,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ssh2socks");

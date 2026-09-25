@@ -13,11 +13,14 @@ use crate::models::Tunnel;
 
 const APP_NAME: &str = "ssh2socks";
 
-pub fn tunnels_file() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(APP_NAME)
-        .join("tunnels.json")
+}
+
+pub fn tunnels_file() -> PathBuf {
+    config_dir().join("tunnels.json")
 }
 
 pub fn load() -> Vec<Tunnel> {
