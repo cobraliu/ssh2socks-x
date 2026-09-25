@@ -365,9 +365,11 @@ mod tests {
 
     #[tokio::test]
     async fn remote_forward_checks_local_service_first() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        // Bound but not listening: connections are refused, and no other
+        // test can take the port meanwhile.
+        let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = closed.local_addr().unwrap().port();
         let r = probe_remote_forward(port, "127.0.0.1", 1).await;
         assert!(!r.ok && r.message.contains("没有服务"), "{r:?}");
 

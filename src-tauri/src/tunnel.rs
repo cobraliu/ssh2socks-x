@@ -882,7 +882,13 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         assert!(!port_free(port));
         drop(listener);
-        assert!(port_free(port));
+        // Other tests running in parallel may briefly get the same port for
+        // a connection of their own.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !port_free(port) {
+            assert!(Instant::now() < deadline, "port {port} never freed");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
@@ -1186,7 +1192,8 @@ mod tests {
         mgr.start("p");
         let logs = || mgr.logs("p").join("\n");
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !logs().contains("断开前的进度") {
+        // The exit line comes last in that path.
+        while !logs().contains("ssh 进程退出") {
             assert!(Instant::now() < deadline, "no progress line:\n{}", logs());
             std::thread::sleep(Duration::from_millis(50));
         }

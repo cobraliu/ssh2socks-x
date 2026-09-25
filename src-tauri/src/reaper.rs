@@ -70,9 +70,25 @@ pub fn init(config_dir: &Path) -> usize {
 
 /// Record a freshly started ssh.
 pub fn track(pid: u32) {
-    if let Some(p) = identify(pid) {
+    if let Some(p) = identify_spawned(pid) {
         update(|rec| rec.procs.push(p));
     }
+}
+
+/// Identity of a child we just spawned. spawn() can return a moment before
+/// exec has renamed the child, while it still has our name; wait (briefly)
+/// for its own. If it never shows, record nothing: an entry that cannot be
+/// matched later is useless, and a wrong one must not be written.
+fn identify_spawned(pid: u32) -> Option<Proc> {
+    let ours = own_name();
+    for _ in 0..40 {
+        let p = identify(pid)?;
+        if ours.as_deref() != Some(p.name.as_str()) {
+            return Some(p);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
 }
 
 /// Forget an ssh we have stopped or seen exit.
@@ -162,6 +178,13 @@ fn parse_stat(pid: u32, stat: &str) -> Option<Proc> {
     Some(Proc { pid, start, name })
 }
 
+/// The name a child has before exec: that of the thread that forked it.
+#[cfg(target_os = "linux")]
+fn own_name() -> Option<String> {
+    let name = std::fs::read_to_string("/proc/thread-self/comm").ok()?;
+    Some(name.trim_end_matches('\n').to_string())
+}
+
 #[cfg(target_os = "linux")]
 fn boot_id() -> Option<String> {
     let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
@@ -228,6 +251,12 @@ fn identify(pid: u32) -> Option<Proc> {
     Some(Proc { pid, start, name })
 }
 
+/// The name a child has before exec: ours.
+#[cfg(target_os = "macos")]
+fn own_name() -> Option<String> {
+    identify(std::process::id()).map(|p| p.name)
+}
+
 #[cfg(target_os = "macos")]
 fn boot_id() -> Option<String> {
     let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
@@ -259,6 +288,11 @@ fn terminate_if(p: &Proc) -> bool {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn identify(_pid: u32) -> Option<Proc> {
+    None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn own_name() -> Option<String> {
     None
 }
 
@@ -329,7 +363,7 @@ mod tests {
     fn stops_a_verified_leftover() {
         let dir = tmpdir("ok");
         let mut child = sleeper();
-        let p = identify(child.id()).unwrap();
+        let p = identify_spawned(child.id()).unwrap();
         write(&dir, dead_owner(), vec![p], boot_id());
         assert_eq!(reap_dir(&dir), 1);
         assert!(!running(&mut child));
@@ -340,7 +374,7 @@ mod tests {
     fn leaves_anything_that_does_not_match() {
         let dir = tmpdir("mismatch");
         let mut child = sleeper();
-        let real = identify(child.id()).unwrap();
+        let real = identify_spawned(child.id()).unwrap();
         let reused = Proc {
             start: real.start + 1,
             ..real.clone()
