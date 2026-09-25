@@ -1,88 +1,92 @@
 # ssh2socks
 
-基于 `~/.ssh/config` 的 SSH 隧道桌面小工具：一键开 SOCKS5 代理（`ssh -D`）、本地端口转发（`ssh -L`）、远程端口转发（`ssh -R`），并可视化管理 SSH 配置和密钥。
-Rust + Tauri v2 实现，安装包/可执行文件只有几 MB，支持 Windows、macOS、Linux。
+English | [简体中文](README.zh-CN.md)
 
-## 功能
+A small desktop app for SSH tunnels built on your `~/.ssh/config`: one click starts a SOCKS5 proxy (`ssh -D`), a local port forward (`ssh -L`) or a remote port forward (`ssh -R`). It can also edit your SSH config and manage your keys.
+Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Windows, macOS and Linux.
 
-- 从 `~/.ssh/config` 读取主机（支持 `Include`，可搜索）
-- 三种隧道类型：
-  - **SOCKS5 代理**：本机开一个 SOCKS5 代理，流量经服务器出去
-  - **本地转发**：把服务器上（或服务器所在局域网里）的端口映射到本机 `127.0.0.1:端口`
-  - **远程转发**：把本机端口发布到服务器 `0.0.0.0:端口`，对外提供访问
-  - 两种转发都有「打开」按钮，可以直接在浏览器里打开对应的 http 地址
-- 首次连接新服务器时自动信任其主机密钥（`StrictHostKeyChecking=accept-new`），不再卡在 yes/no 确认；已记录的密钥如果变了仍会拒绝，并提示处理方法
-- 一键启动 / 停止、全部启动 / 全部停止
-- 断线自动重连（1s → 30s 指数退避），`ServerAliveInterval` 保活
-- 连通性探测，每 30 秒一次：
-  - SOCKS：通过代理访问探测地址。`http://` 地址会完整发起一次 HTTP 请求；`https://` 地址只要 SOCKS CONNECT 成功就算连通（不做 TLS 握手）
-  - 本地转发：检查转发出去的连接会不会被立即断开（服务器连不上目标时会断开）
-  - 远程转发：先确认本机服务在运行，再从本机访问 `服务器:端口`
-- 报错及时可见：日志每行都带时间；列表里直接显示最近一次错误；连接超过 10 秒还没建立就在日志里提示，超过 45 秒则放弃这次尝试并自动重连
-- **SSH 配置管理**（「SSH 配置」页）：
-  - 可视化查看、添加、编辑、删除 `~/.ssh/config` 里的主机（别名、地址、用户、端口、密钥）
-  - 连接方式可选直连、跳板机（`ProxyJump`）或 `ProxyCommand`，附带经跳板机、SOCKS5 代理、HTTP 代理、ncat 等常用模板
-  - 只改动被编辑主机的这几项，注释、其它选项、`Include`/`Match` 和换行风格都原样保留；每次保存前备份为 `config.ssh2socks.bak`
-  - 新增的主机插在 `Host *` / `Match` 之前，保证生效
-  - 「测试连接」一键验证主机能否免密登录；也可以用系统编辑器直接打开配置文件
-- **密钥管理**（「密钥」页）：
-  - 列出 `~/.ssh/*.pub`，显示类型、SHA256 指纹、注释，一键查看和复制公钥
-  - 生成密钥对：Ed25519 或 RSA（2048 / 3072 / 4096），自定义文件名和注释，可选口令；不依赖系统的 `ssh-keygen`
-  - 导入已有密钥对：选择文件或直接粘贴，支持 OpenSSH 格式和 RSA PEM（PKCS#1 / PKCS#8），带口令的私钥需要输入口令
-  - 导入前逐项校验并显示结果：解析私钥 → 用口令解密 → 公私钥配对 → 私钥签名、公钥验签 → 公钥加密、私钥解密（RSA 用 OAEP，Ed25519 换算成 X25519 后做密钥交换）
-  - 去重：文件名已存在，或同一把密钥（指纹相同）已经以别的名字存在时，拒绝保存；已有文件永远不会被覆盖
-  - 私钥以 `600` 权限保存（Linux / macOS）
-- 系统托盘常驻，关闭窗口不会断开隧道
-- 退出时清理所有 ssh 子进程（Windows 用 Job Object，Linux 用 `PR_SET_PDEATHSIG`）
+> The user interface is in Chinese.
 
-## 运行要求
+## Features
 
-- 系统自带 OpenSSH 客户端（`ssh` 在 PATH 中）；Windows 10/11 默认已安装
-- 使用**密钥免密登录**（以 `BatchMode=yes` 运行，不会弹出密码输入）
-- Windows：需要 WebView2 运行时（Win11 自带；安装包会自动下载）
-- Linux：需要 `libwebkit2gtk-4.1`、`libayatana-appindicator3`（deb/rpm 包会自动拉依赖）
+- Reads hosts from `~/.ssh/config`, including `Include` files, with search
+- Three tunnel types:
+  - **SOCKS5 proxy**: opens a SOCKS5 proxy on this machine; traffic leaves through the server
+  - **Local forward**: maps a port on the server, or on the server's LAN, to `127.0.0.1:<port>` on this machine
+  - **Remote forward**: publishes a local port on the server's `0.0.0.0:<port>` so others can reach it
+  - Both forward types have an "Open" button that opens the http address in your browser
+- New servers' host keys are trusted automatically on first connect (`StrictHostKeyChecking=accept-new`), so it never hangs on a yes/no prompt. A changed key for a known host is still refused, with a hint on how to fix it
+- Start or stop tunnels one at a time, or all at once
+- Reconnects automatically (exponential backoff from 1s to 30s), with `ServerAliveInterval` keepalives
+- Health check every 30 seconds:
+  - SOCKS: fetches the probe URL through the proxy. An `http://` URL gets a full HTTP request; for `https://` a successful SOCKS CONNECT counts as up (no TLS handshake)
+  - Local forward: checks whether a forwarded connection is dropped right away (which happens when the server can't reach the target)
+  - Remote forward: checks that the local service is running, then connects to `server:port` from this machine
+- Errors show up right away: every log line is timestamped, the list shows the latest error, and a connection that isn't up after 10 seconds is noted in the log. After 45 seconds the attempt is abandoned and retried
+- **SSH config editor** ("SSH 配置" tab):
+  - View, add, edit and delete hosts in `~/.ssh/config` (alias, hostname, user, port, identity file)
+  - Connect directly, through a jump host (`ProxyJump`), or with a `ProxyCommand`. Templates cover a jump host, a SOCKS5 proxy, an HTTP proxy and ncat
+  - Only the edited host's fields are changed. Comments, other options, `Include`/`Match` blocks and line endings are left as they are. The file is backed up to `config.ssh2socks.bak` before each save
+  - New hosts are inserted before `Host *` / `Match` so they take effect
+  - "测试连接" (test connection) checks that key-based login works. The config file can also be opened in your system editor
+- **Key management** ("密钥" tab):
+  - Lists `~/.ssh/*.pub` with type, SHA256 fingerprint and comment. View or copy a public key in one click
+  - Generate key pairs: Ed25519 or RSA (2048 / 3072 / 4096), with your own file name and comment and an optional passphrase. `ssh-keygen` is not needed
+  - Import existing key pairs from files or pasted text. OpenSSH format and RSA PEM (PKCS#1 / PKCS#8) are supported; encrypted private keys need their passphrase
+  - Each import is checked step by step, and the result of each step is shown: parse the private key → decrypt it with the passphrase → match it to the public key → sign with the private key and verify with the public key → encrypt with the public key and decrypt with the private key (RSA uses OAEP; Ed25519 is mapped to X25519 for a key exchange)
+  - No duplicates: saving is refused if the file name is taken, or if the same key (same fingerprint) already exists under another name. Existing files are never overwritten
+  - Private keys are saved with mode `600` (Linux / macOS)
+- Lives in the system tray; closing the window keeps tunnels running
+- All ssh child processes are cleaned up on exit (Job Object on Windows, `PR_SET_PDEATHSIG` on Linux)
 
-## 下载
+## Requirements
 
-在 [Actions](../../actions) 的每次构建里下载 artifacts，或在 [Releases](../../releases) 下载正式版本：
+- An OpenSSH client (`ssh` on PATH). Windows 10/11 include one by default
+- **Key-based login**. Tunnels run with `BatchMode=yes`, so there is no password prompt. For passphrase-protected keys, add them to ssh-agent with `ssh-add` first
+- Windows: the WebView2 runtime (bundled with Windows 11; the installer downloads it if needed)
+- Linux: `libwebkit2gtk-4.1` and `libayatana-appindicator3` (the deb/rpm packages pull these in)
 
-| 平台 | 文件 |
+## Download
+
+Get the artifacts of any build from [Actions](../../actions), or releases from [Releases](../../releases):
+
+| Platform | Files |
 | --- | --- |
-| Windows | `*_x64-setup.exe`（NSIS 安装包）、`*.msi`、`*_portable.exe`（免安装单文件） |
-| macOS | `*_universal.dmg`（Intel + Apple Silicon） |
-| Linux | `*.AppImage`、`*.deb`、`*.rpm`、`*_linux_x64`（裸二进制） |
+| Windows | `*_x64-setup.exe` (NSIS installer), `*.msi`, `*_portable.exe` (single portable file) |
+| macOS | `*_universal.dmg`, `*_macos_universal.app.zip` (Intel + Apple Silicon) |
+| Linux | `*.AppImage`, `*.deb`, `*.rpm`, `*_linux_x64` (plain binary) |
 
-> macOS 包未经公证。首次打开请右键 → 打开，或执行 `xattr -cr /Applications/ssh2socks.app`。
+> The macOS build is not notarized. The first time, right-click the app → Open, or run `xattr -cr /Applications/ssh2socks.app`.
 
-## 远程转发注意事项
+## Remote forwards
 
-sshd 默认只允许远程转发监听服务器的 `127.0.0.1`。要让外网访问到，需要在服务器的 `/etc/ssh/sshd_config` 里设置：
+By default sshd only lets remote forwards listen on the server's `127.0.0.1`. To make them reachable from outside, set this in the server's `/etc/ssh/sshd_config`:
 
 ```
-GatewayPorts clientspecified   # 或 yes
+GatewayPorts clientspecified   # or yes
 ```
 
-改完重启 sshd，并确认服务器防火墙或云安全组已放行对应端口。
+Restart sshd afterwards, and make sure the server's firewall or cloud security group allows the port.
 
-## 配置文件
+## Settings file
 
-与旧版 Python 实现兼容，位于：
+Compatible with the old Python version. Stored at:
 
-- Linux：`~/.config/ssh2socks/tunnels.json`
-- macOS：`~/Library/Application Support/ssh2socks/tunnels.json`
-- Windows：`%APPDATA%\ssh2socks\tunnels.json`
+- Linux: `~/.config/ssh2socks/tunnels.json`
+- macOS: `~/Library/Application Support/ssh2socks/tunnels.json`
+- Windows: `%APPDATA%\ssh2socks\tunnels.json`
 
-## 本地构建
+## Building
 
-需要 Rust（stable）、Node.js 20+，以及 [Tauri 的系统依赖](https://v2.tauri.app/start/prerequisites/)。
+Requires stable Rust, Node.js 20+, and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 npm ci
-npx tauri dev      # 开发运行
-npx tauri build    # 打包，产物在 src-tauri/target/release/bundle/
+npx tauri dev      # run in development
+npx tauri build    # package; output goes to src-tauri/target/release/bundle/
 ```
 
-测试与检查：
+Tests and checks:
 
 ```bash
 cd src-tauri
@@ -91,13 +95,13 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-## CI / 发布
+## CI / releases
 
-`.github/workflows/ci.yml`：
+`.github/workflows/ci.yml`:
 
-- 每次推送 / PR：fmt + clippy + 测试，然后在 Windows、macOS、Linux 上构建并上传产物
-- 推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）：额外创建 GitHub Release 并附上全部安装包
+- Every push and PR: fmt, clippy and tests, then builds on Windows, macOS and Linux and uploads the artifacts
+- Pushing a `v*` tag (e.g. `git tag v0.5.0 && git push origin v0.5.0`) also creates a GitHub Release with all installers attached
 
-## 许可证
+## License
 
 Apache-2.0
