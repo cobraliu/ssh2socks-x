@@ -986,9 +986,19 @@ mod tests {
             }
         };
 
+        // Every running ssh is recorded for a later launch's cleanup.
+        crate::reaper::init(&dir);
+        let run_file = dir.join("run").join(format!("{}.json", std::process::id()));
+        let recorded = |pid: u32| {
+            std::fs::read_to_string(&run_file)
+                .unwrap()
+                .contains(&format!("\"pid\":{pid},"))
+        };
+
         // Start -> connected; stderr is captured.
         mgr.start("e2e");
         wait(TunnelState::Connected, 10);
+        assert!(recorded(pid().unwrap()));
         assert!(logs().contains("fake ssh authenticating"));
         assert!(logs().contains("已就绪：SOCKS5 代理"));
 
@@ -999,6 +1009,8 @@ mod tests {
         wait(TunnelState::Connected, 10);
         assert!(logs().contains("自动重连"));
         assert_ne!(pid(), Some(first));
+        assert!(!recorded(first) && recorded(pid().unwrap()));
+        let second = pid().unwrap();
 
         // Stop, then restart right away: the new process must survive.
         mgr.stop("e2e");
@@ -1007,8 +1019,10 @@ mod tests {
         wait(TunnelState::Connected, 10);
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(state(), TunnelState::Connected);
+        let third = pid().unwrap();
         mgr.stop("e2e");
         wait(TunnelState::Stopped, 5);
+        assert!(!recorded(second) && !recorded(third));
 
         // Helpers ssh started (like a ProxyJump `ssh -W`) die with it.
         let helpers = std::fs::read_to_string(dir.join("helpers")).unwrap();

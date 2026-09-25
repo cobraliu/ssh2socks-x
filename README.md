@@ -38,6 +38,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
 - Light and dark themes: follow the system, or pick one with the theme button (◐ / ☀ / ☾) at the top right. Both choices are remembered
 - Lives in the system tray; closing the window keeps tunnels running
 - Each tunnel's ssh runs in its own Job Object (Windows) or process group (Linux / macOS). Stopping or retrying a tunnel also ends its `ProxyJump` / `ProxyCommand` helper processes, and everything is cleaned up on exit
+- If the app itself is killed or crashes: on Windows the Job Object still ends every ssh; on Linux / macOS, `SIGTERM` / `SIGINT` / `SIGHUP` are handled like Quit, and on the next launch any ssh left behind is stopped. It is only stopped when its pid, exact start time, name and boot all match what was recorded, so an unrelated process that reused the pid is never touched
 
 ## Requirements
 

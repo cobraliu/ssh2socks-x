@@ -8,6 +8,8 @@ mod keys;
 mod models;
 mod platform;
 mod probe;
+#[cfg(unix)]
+mod reaper;
 mod ssh_config;
 mod ssh_edit;
 mod store;
@@ -419,9 +421,40 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Treat SIGTERM / SIGINT / SIGHUP (logout, `kill`, Ctrl-C) like Quit, so
+/// the tunnels are stopped instead of left running.
+#[cfg(unix)]
+fn quit_on_signals(app: AppHandle) {
+    use tokio::signal::unix::{signal, SignalKind};
+    tauri::async_runtime::spawn(async move {
+        let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+            signal(SignalKind::hangup()),
+        ) else {
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+            _ = hup.recv() => {}
+        }
+        app.state::<Arc<Manager>>().kill_all_now();
+        app.exit(0);
+    });
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
+            #[cfg(unix)]
+            {
+                let n = reaper::init(&store::config_dir());
+                if n > 0 {
+                    eprintln!("ssh2socks: stopped {n} ssh process(es) left by an earlier run");
+                }
+                quit_on_signals(app.handle().clone());
+            }
             let mgr = Manager::new(Some(app.handle().clone()), store::load());
             app.manage(mgr);
             let prefs = i18n::load_prefs();

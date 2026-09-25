@@ -38,6 +38,7 @@ Rust + Tauri v2 实现，安装包/可执行文件只有几 MB，支持 Windows�
 - 明暗主题：跟随系统，或用右上角主题按钮（◐ / ☀ / ☾）固定为浅色或深色。两项选择都会被记住
 - 系统托盘常驻，关闭窗口不会断开隧道
 - 每条隧道的 ssh 放在独立的 Job Object（Windows）或进程组（Linux / macOS）中，停止或重试隧道时连同 `ProxyJump` / `ProxyCommand` 辅助进程一起结束，退出时清理全部子进程
+- 程序本身被强制结束或崩溃时：Windows 由 Job Object 保证 ssh 一并结束；Linux / macOS 把 `SIGTERM` / `SIGINT` / `SIGHUP` 当作“退出”处理，并在下次启动时清理残留的 ssh。只有 pid、精确启动时间、进程名和本次开机都与记录一致时才会结束该进程，pid 被其他程序复用时绝不会误杀
 
 ## 运行要求
 

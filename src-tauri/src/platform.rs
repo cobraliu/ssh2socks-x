@@ -63,11 +63,15 @@ pub fn adopt(child: &Child) -> ProcTree {
 
 /// Unix: ssh leads its own process group (see [`prepare`]), which its proxy
 /// helpers inherit.
+/// It is also recorded so a later launch can stop it if we die first (see
+/// `reaper`).
 #[cfg(unix)]
 pub fn adopt(child: &Child) -> ProcTree {
-    ProcTree {
-        pgid: child.id().and_then(|pid| i32::try_from(pid).ok()),
+    let pgid = child.id().and_then(|pid| i32::try_from(pid).ok());
+    if let Some(pid) = child.id() {
+        crate::reaper::track(pid);
     }
+    ProcTree { pgid }
 }
 
 impl ProcTree {
@@ -102,6 +106,10 @@ impl Drop for ProcTree {
                     self.job as windows_sys::Win32::Foundation::HANDLE,
                 );
             }
+        }
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            crate::reaper::untrack(pgid as u32);
         }
     }
 }
