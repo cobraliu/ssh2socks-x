@@ -12,26 +12,36 @@ pub fn hide_console(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub fn hide_console(_cmd: &mut Command) {}
 
-/// Tie the child's lifetime to ours.
-///
-/// Windows does not kill children when the parent dies, so every ssh.exe is
-/// put into one job object flagged KILL_ON_JOB_CLOSE: when this process exits
-/// (even by crashing) the handle closes and Windows kills the tunnels too.
+/// An ssh process together with everything it starts: ProxyJump and
+/// ProxyCommand run as child processes of ssh, and killing only ssh leaves
+/// them running (and holding their connections) on Windows.
+pub struct ProcTree {
+    #[cfg(windows)]
+    job: usize,
+    #[cfg(unix)]
+    pgid: Option<i32>,
+}
+
+/// Windows: each ssh.exe goes into its own job object flagged
+/// KILL_ON_JOB_CLOSE, which its children join automatically. Terminating the
+/// job ends the whole tree, and if this process dies (even by crashing) the
+/// handle closes and Windows kills the tree too.
 #[cfg(windows)]
-pub fn adopt(child: &Child) {
-    use std::sync::OnceLock;
-    use windows_sys::Win32::Foundation::HANDLE;
+pub fn adopt(child: &Child) -> ProcTree {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
-    static JOB: OnceLock<usize> = OnceLock::new();
-    let job = *JOB.get_or_init(|| unsafe {
+    let Some(raw) = child.raw_handle() else {
+        return ProcTree { job: 0 };
+    };
+    unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if job.is_null() {
-            return 0;
+            return ProcTree { job: 0 };
         }
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -41,19 +51,68 @@ pub fn adopt(child: &Child) {
             &info as *const _ as *const core::ffi::c_void,
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         );
-        job as usize
-    });
-    if let (true, Some(raw)) = (job != 0, child.raw_handle()) {
-        unsafe {
-            AssignProcessToJobObject(job as HANDLE, raw as HANDLE);
+        // ssh has only just started; it reads its config before it launches
+        // a proxy, so the proxy is created inside the job.
+        if AssignProcessToJobObject(job, raw as HANDLE) == 0 {
+            CloseHandle(job);
+            return ProcTree { job: 0 };
+        }
+        ProcTree { job: job as usize }
+    }
+}
+
+/// Unix: ssh leads its own process group (see [`prepare`]), which its proxy
+/// helpers inherit.
+#[cfg(unix)]
+pub fn adopt(child: &Child) -> ProcTree {
+    ProcTree {
+        pgid: child.id().and_then(|pid| i32::try_from(pid).ok()),
+    }
+}
+
+impl ProcTree {
+    /// Ends ssh and every process it started.
+    pub fn kill(&self) {
+        #[cfg(windows)]
+        if self.job != 0 {
+            unsafe {
+                windows_sys::Win32::System::JobObjects::TerminateJobObject(
+                    self.job as windows_sys::Win32::Foundation::HANDLE,
+                    1,
+                );
+            }
+        }
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            unsafe {
+                libc::kill(-pgid, libc::SIGTERM);
+            }
         }
     }
 }
 
-/// On Linux ask the kernel to SIGTERM ssh if we die; other Unixes rely on
-/// the explicit cleanup at exit.
-#[cfg(target_os = "linux")]
+impl Drop for ProcTree {
+    /// Nothing outlives the tunnel attempt that started it.
+    fn drop(&mut self) {
+        self.kill();
+        #[cfg(windows)]
+        if self.job != 0 {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(
+                    self.job as windows_sys::Win32::Foundation::HANDLE,
+                );
+            }
+        }
+    }
+}
+
+/// Unix: put ssh in its own process group so [`ProcTree`] can signal it
+/// with its helpers. On Linux also ask the kernel to SIGTERM ssh if we die;
+/// other Unixes rely on the explicit cleanup at exit.
+#[cfg(unix)]
 pub fn prepare(cmd: &mut Command) {
+    cmd.process_group(0);
+    #[cfg(target_os = "linux")]
     unsafe {
         cmd.pre_exec(|| {
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
@@ -62,18 +121,18 @@ pub fn prepare(cmd: &mut Command) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn prepare(_cmd: &mut Command) {}
 
-#[cfg(not(windows))]
-pub fn adopt(_child: &Child) {}
-
-/// Synchronously terminate a child by pid (used when the app is exiting and
-/// the async runtime may no longer get a chance to run).
+/// Synchronously terminate an ssh process group by its leader's pid (used
+/// when the app is exiting and the async runtime may no longer get a chance
+/// to run).
 #[cfg(unix)]
 pub fn terminate_pid(pid: u32) {
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    if let Ok(pid) = i32::try_from(pid) {
+        unsafe {
+            libc::kill(-pid, libc::SIGTERM);
+        }
     }
 }
 

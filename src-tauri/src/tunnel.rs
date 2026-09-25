@@ -505,7 +505,9 @@ impl Manager {
                 return Outcome::Fatal;
             }
         };
-        platform::adopt(&child);
+        // Dropped on every way out of this attempt, taking any ProxyJump /
+        // ProxyCommand helpers down with ssh.
+        let tree = platform::adopt(&child);
         self.set_pid(id, child.id());
         let (forwarded_tx, mut forwarded) = watch::channel(false);
         if let Some(stderr) = child.stderr.take() {
@@ -573,7 +575,7 @@ impl Manager {
                         waited.as_secs()
                     ),
                 );
-                let _ = self.kill(id, child).await;
+                let _ = self.kill(id, child, tree).await;
                 return Outcome::Failed;
             }
             self.note(
@@ -587,7 +589,7 @@ impl Manager {
         };
         match event {
             Event::Exited(status) => return self.exited(id, status),
-            Event::Stop => return self.kill(id, child).await,
+            Event::Stop => return self.kill(id, child, tree).await,
             Event::Ready | Event::Probe | Event::Tick => {}
         }
 
@@ -606,7 +608,7 @@ impl Manager {
             match event {
                 Event::Probe | Event::Ready | Event::Tick => self.spawn_probe(tunnel),
                 Event::Exited(status) => return self.exited(id, status),
-                Event::Stop => return self.kill(id, child).await,
+                Event::Stop => return self.kill(id, child, tree).await,
             }
         }
     }
@@ -628,7 +630,8 @@ impl Manager {
         Outcome::Failed
     }
 
-    async fn kill(&self, id: &str, mut child: Child) -> Outcome {
+    async fn kill(&self, id: &str, mut child: Child, tree: platform::ProcTree) -> Outcome {
+        tree.kill();
         let _ = child.kill().await;
         self.set_pid(id, None);
         Outcome::Stopped
@@ -937,6 +940,9 @@ mod tests {
              \x20   time.sleep(0.3)\n\
              \x20   print('debug1: remote forward success for: listen 0.0.0.0:1, connect 127.0.0.1:2', file=sys.stderr, flush=True)\n\
              \x20   time.sleep(3600)\n\
+             import os, subprocess\n\
+             helper = subprocess.Popen(['sleep', '3600'])\n\
+             with open(os.path.join(os.path.dirname(sys.argv[0]), 'helpers'), 'a') as f: f.write(f'{helper.pid}\\n')\n\
              port = int(sys.argv[sys.argv.index('-D') + 1].split(':')[1])\n\
              print('fake ssh authenticating', file=sys.stderr, flush=True)\n\
              time.sleep(0.4)\n\
@@ -1003,6 +1009,24 @@ mod tests {
         assert_eq!(state(), TunnelState::Connected);
         mgr.stop("e2e");
         wait(TunnelState::Stopped, 5);
+
+        // Helpers ssh started (like a ProxyJump `ssh -W`) die with it.
+        let helpers = std::fs::read_to_string(dir.join("helpers")).unwrap();
+        let helpers: Vec<i32> = helpers.lines().map(|l| l.parse().unwrap()).collect();
+        assert!(helpers.len() >= 3, "{helpers:?}");
+        let alive = |pid: i32| {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            let exists = unsafe { libc::kill(pid, 0) } == 0;
+            exists && !stat.contains(") Z ")
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while helpers.iter().any(|&p| alive(p)) {
+            assert!(
+                Instant::now() < deadline,
+                "helpers left running: {helpers:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
 
         // Port taken by someone else -> reported, not mistaken for ssh.
         let blocker = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();

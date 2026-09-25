@@ -37,7 +37,7 @@ Rust + Tauri v2 实现，安装包/可执行文件只有几 MB，支持 Windows�
 - 中英文界面：包括报错、日志和托盘菜单。首次启动跟随系统语言，可随时用右上角「EN / 中」按钮切换
 - 明暗主题：跟随系统，或用右上角主题按钮（◐ / ☀ / ☾）固定为浅色或深色。两项选择都会被记住
 - 系统托盘常驻，关闭窗口不会断开隧道
-- 退出时清理所有 ssh 子进程（Windows 用 Job Object，Linux 用 `PR_SET_PDEATHSIG`）
+- 每条隧道的 ssh 放在独立的 Job Object（Windows）或进程组（Linux / macOS）中，停止或重试隧道时连同 `ProxyJump` / `ProxyCommand` 辅助进程一起结束，退出时清理全部子进程
 
 ## 运行要求
 

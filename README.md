@@ -37,7 +37,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
 - English and Chinese interface, including error messages, logs and the tray menu. It follows the system language on first launch; switch with the "EN / 中" button at the top right
 - Light and dark themes: follow the system, or pick one with the theme button (◐ / ☀ / ☾) at the top right. Both choices are remembered
 - Lives in the system tray; closing the window keeps tunnels running
-- All ssh child processes are cleaned up on exit (Job Object on Windows, `PR_SET_PDEATHSIG` on Linux)
+- Each tunnel's ssh runs in its own Job Object (Windows) or process group (Linux / macOS). Stopping or retrying a tunnel also ends its `ProxyJump` / `ProxyCommand` helper processes, and everything is cleaned up on exit
 
 ## Requirements
 
