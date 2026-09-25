@@ -2961,8 +2961,9 @@ dependencies = [
 
 [[package]]
 name = "ssh2socks"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
+ "chrono",
  "codepage",
  "dirs",
  "encoding_rs",

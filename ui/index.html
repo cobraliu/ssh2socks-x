@@ -12,7 +12,7 @@
       <span class="logo">S5</span>
       <div>
         <h1>ssh2socks</h1>
-        <p class="sub">SSH → SOCKS5 代理管理</p>
+        <p class="sub">SSH 代理与端口转发</p>
       </div>
     </div>
     <div class="actions">
@@ -25,7 +25,7 @@
   <main>
     <section class="panel list-panel">
       <div class="thead row">
-        <span>状态</span><span>名称</span><span>Host</span><span>本地代理</span><span>连通</span><span class="right">操作</span>
+        <span>状态</span><span>名称</span><span>Host</span><span>映射</span><span>连通</span><span class="right">操作</span>
       </div>
       <div id="list" class="tbody"></div>
       <div id="empty" class="empty" hidden>
@@ -49,12 +49,24 @@
       <input id="search" type="search" placeholder="搜索名称或 IP / 主机名…" autocomplete="off" />
       <ul id="hosts" class="hosts" role="listbox"></ul>
       <div class="grid">
+        <span class="label">类型</span>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="kind" value="socks" /> SOCKS5 代理</label>
+          <label><input type="radio" name="kind" value="local" /> 本地转发</label>
+          <label><input type="radio" name="kind" value="remote" /> 远程转发</label>
+        </div>
+        <span></span>
+        <p id="kind-help" class="help"></p>
         <label for="name">名称</label>
         <input id="name" autocomplete="off" />
-        <label for="port">本地 SOCKS 端口</label>
+        <label for="port" id="port-label">本地 SOCKS 端口</label>
         <input id="port" type="number" min="1" max="65535" />
-        <label for="probe">探测地址</label>
-        <input id="probe" autocomplete="off" />
+        <label for="target" data-kinds="local">目标地址</label>
+        <input id="target" data-kinds="local" autocomplete="off" placeholder="127.0.0.1（或服务器所在局域网的 IP）" />
+        <label for="rport" id="rport-label" data-kinds="local remote">目标端口</label>
+        <input id="rport" data-kinds="local remote" type="number" min="1" max="65535" />
+        <label for="probe" data-kinds="socks">探测地址</label>
+        <input id="probe" data-kinds="socks" autocomplete="off" />
         <span></span>
         <label class="check"><input id="auto" type="checkbox" /> 进程退出时自动重连</label>
       </div>

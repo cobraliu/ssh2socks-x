@@ -6,6 +6,44 @@ const { listen } = window.__TAURI__.event;
 const STATE_TEXT = { stopped: "已停止", connecting: "连接中", connected: "已连接", error: "错误" };
 const MAX_LOG_LINES = 500;
 
+const KINDS = {
+  socks: {
+    tag: "SOCKS",
+    portLabel: "本地 SOCKS 端口",
+    help: "在本机开一个 SOCKS5 代理，流量经服务器出去。",
+    firstPort: 1080,
+  },
+  local: {
+    tag: "本地转发",
+    portLabel: "本机端口",
+    rportLabel: "目标端口",
+    help: "把服务器能访问到的端口（服务器本机或其局域网）映射到本机，用 127.0.0.1:本机端口 访问。",
+    firstPort: 8080,
+  },
+  remote: {
+    tag: "远程转发",
+    portLabel: "本机服务端口",
+    rportLabel: "服务器端口",
+    help: "把本机端口发布到服务器 0.0.0.0:服务器端口。需 sshd 设置 GatewayPorts yes / clientspecified，否则只监听服务器 127.0.0.1。",
+    firstPort: 8080,
+  },
+};
+
+const hostPort = (h, p) => (h.includes(":") ? `[${h}]:${p}` : `${h}:${p}`);
+
+function mappingOf(v) {
+  switch (v.kind) {
+    case "local":
+      return [`${v.port} → ${hostPort(v.target_host, v.remote_port)}`,
+        `本机 127.0.0.1:${v.port} → 服务器上的 ${hostPort(v.target_host, v.remote_port)}`];
+    case "remote":
+      return [`:${v.remote_port} → 本机:${v.port}`,
+        `服务器 0.0.0.0:${v.remote_port} → 本机 127.0.0.1:${v.port}`];
+    default:
+      return [`127.0.0.1:${v.port}`, `SOCKS5 代理地址：127.0.0.1:${v.port}`];
+  }
+}
+
 const $ = (id) => document.getElementById(id);
 const tunnels = new Map(); // id -> TunnelView
 const rows = new Map(); // id -> row element
@@ -42,14 +80,15 @@ const isActive = (v) => v.state === "connecting" || v.state === "connected";
 function healthOf(v) {
   switch (v.state) {
     case "connecting":
-      return ["连接中…", ""];
+      return v.detail ? [v.detail, "warn"] : ["连接中…", ""];
     case "connected":
       if (!v.probe) return ["检测中…", ""];
-      return v.probe.ok
-        ? [`通 ${Math.round(v.probe.latency_ms)}ms`, "ok"]
-        : [`不通 · ${v.probe.message}`, "bad"];
+      if (!v.probe.ok) return [`不通 · ${v.probe.message}`, "bad"];
+      return v.probe.latency_ms == null
+        ? ["通", "ok"]
+        : [`通 ${Math.round(v.probe.latency_ms)}ms`, "ok"];
     case "error":
-      return ["错误", "bad"];
+      return [v.detail ? `错误 · ${v.detail}` : "错误", "bad"];
     default:
       return ["—", ""];
   }
@@ -69,6 +108,13 @@ function buildRow(id) {
 
   const ops = el("span", "ops");
   const toggle = el("button", "btn small toggle");
+  const open = el("button", "btn small open", "打开");
+  open.title = "在浏览器中打开";
+  open.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const url = await call("open_in_browser", { id });
+    toast(`已在浏览器打开 ${url}`);
+  });
   const edit = el("button", "btn small", "编辑");
   const del = el("button", "btn small danger", "删除");
   toggle.addEventListener("click", (e) => {
@@ -84,7 +130,7 @@ function buildRow(id) {
     e.stopPropagation();
     confirmDelete(tunnels.get(id));
   });
-  ops.append(toggle, edit, del);
+  ops.append(open, toggle, edit, del);
 
   row.append(status, name, host, addr, health, ops);
   row.addEventListener("click", () => select(id));
@@ -98,8 +144,13 @@ function updateRow(v) {
   row.querySelector(".state-text").textContent = STATE_TEXT[v.state];
   row.querySelector(".name").textContent = v.name;
   row.querySelector(".host").textContent = v.host;
-  row.querySelector(".addr").textContent = `127.0.0.1:${v.port}`;
-  row.querySelector(".addr").title = `SOCKS5 代理地址：127.0.0.1:${v.port}`;
+  const [mapText, mapTitle] = mappingOf(v);
+  const addr = row.querySelector(".addr");
+  addr.replaceChildren(el("span", "tag", KINDS[v.kind]?.tag ?? v.kind), el("span", "addr-text", mapText));
+  addr.title = mapTitle;
+  const open = row.querySelector(".open");
+  open.hidden = v.kind === "socks";
+  open.disabled = v.state !== "connected";
   const [text, cls] = healthOf(v);
   const health = row.querySelector(".health");
   health.textContent = text;
@@ -164,6 +215,30 @@ let editing = null; // TunnelView being edited, or null for new
 let hosts = [];
 let chosenHost = null;
 
+const currentKind = () => document.querySelector('input[name="kind"]:checked')?.value ?? "socks";
+
+function applyKind() {
+  const kind = currentKind();
+  const k = KINDS[kind];
+  $("port-label").textContent = k.portLabel;
+  $("rport-label").textContent = k.rportLabel ?? "";
+  $("kind-help").textContent = k.help;
+  for (const node of document.querySelectorAll("#editor [data-kinds]")) {
+    node.hidden = !node.dataset.kinds.split(" ").includes(kind);
+  }
+}
+
+async function onKindChange() {
+  applyKind();
+  if (editing) return;
+  const kind = currentKind();
+  const first = KINDS[kind].firstPort;
+  // A remote forward publishes an existing local service, so its port is not
+  // a free one to pick; default both sides to the same common port.
+  $("port").value = kind === "remote" ? first : await call("suggest_port", { start: first });
+  if (kind === "remote" && !$("rport").value) $("rport").value = first;
+}
+
 function renderHosts() {
   const q = $("search").value.trim().toLowerCase();
   const list = $("hosts");
@@ -205,11 +280,16 @@ async function openEditor(view) {
   $("editor-title").textContent = view ? "编辑隧道" : "新建隧道";
   $("editor-error").hidden = true;
   $("search").value = "";
+  const kind = view ? view.kind : "socks";
   const [hostList, port, probe] = await Promise.all([
     call("list_hosts"),
-    view ? view.port : call("suggest_port"),
+    view ? view.port : call("suggest_port", { start: KINDS[kind].firstPort }),
     call("default_probe_url"),
   ]);
+  document.querySelector(`input[name="kind"][value="${kind}"]`).checked = true;
+  $("target").value = view ? view.target_host : "127.0.0.1";
+  $("rport").value = view && view.remote_port ? view.remote_port : "";
+  applyKind();
   hosts = hostList;
   chosenHost = view ? view.host : null;
   $("name").value = view ? view.name : "";
@@ -228,8 +308,11 @@ function showEditorError(message) {
 }
 
 async function submitEditor() {
+  const kind = currentKind();
+  const valid = (p) => Number.isInteger(p) && p >= 1 && p <= 65535;
   const port = Number($("port").value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  const remotePort = kind === "socks" ? 0 : Number($("rport").value);
+  if (!valid(port) || (kind !== "socks" && !valid(remotePort))) {
     showEditorError("端口必须在 1–65535 之间。");
     return;
   }
@@ -237,7 +320,10 @@ async function submitEditor() {
     id: editing ? editing.id : null,
     name: $("name").value,
     host: chosenHost ?? "",
+    kind,
     port,
+    remote_port: remotePort,
+    target_host: $("target").value,
     probe_url: $("probe").value,
     auto_reconnect: $("auto").checked,
   };
@@ -269,6 +355,9 @@ $("add").addEventListener("click", () => openEditor(null));
 $("start-all").addEventListener("click", () => call("start_all"));
 $("stop-all").addEventListener("click", () => call("stop_all"));
 $("search").addEventListener("input", renderHosts);
+for (const radio of document.querySelectorAll('input[name="kind"]')) {
+  radio.addEventListener("change", onKindChange);
+}
 $("editor-cancel").addEventListener("click", () => $("editor").close());
 $("editor-form").addEventListener("submit", (e) => {
   e.preventDefault();

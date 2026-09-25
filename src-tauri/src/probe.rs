@@ -1,10 +1,13 @@
-//! End-to-end connectivity probe through the local SOCKS5 proxy.
+//! End-to-end connectivity probes.
 //!
-//! Connects to 127.0.0.1:<port> (the running `ssh -D`), asks it to CONNECT to
+//! SOCKS tunnels: connects to 127.0.0.1:<port> (the running `ssh -D`), asks it to CONNECT to
 //! the probe target and, for `http://` URLs, performs a tiny HTTP request.
 //! For `https://` URLs a successful CONNECT is taken as success: it already
 //! proves the ssh server reached the target, and skipping TLS keeps the binary
 //! small.
+//!
+//! Port forwards have their own, protocol-agnostic checks; see
+//! [`probe_local_forward`] and [`probe_remote_forward`].
 
 use std::time::{Duration, Instant};
 
@@ -15,6 +18,29 @@ use tokio::time::timeout;
 use crate::models::ProbeResult;
 
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long a forwarded connection must stay open to count as working.
+const FORWARD_SETTLE: Duration = Duration::from_secs(3);
+const LOCAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn ok(latency_ms: Option<f64>) -> ProbeResult {
+    ProbeResult {
+        ok: true,
+        latency_ms,
+        message: "通".into(),
+    }
+}
+
+fn fail(latency_ms: Option<f64>, message: impl Into<String>) -> ProbeResult {
+    ProbeResult {
+        ok: false,
+        latency_ms,
+        message: message.into(),
+    }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
 
 #[derive(Debug, PartialEq)]
 struct Target {
@@ -135,31 +161,81 @@ async fn probe_inner(proxy_port: u16, target: &Target) -> Result<(), String> {
 
 pub async fn run_probe(proxy_port: u16, probe_url: &str, limit: Duration) -> ProbeResult {
     let Some(target) = parse_url(probe_url) else {
-        return ProbeResult {
-            ok: false,
-            latency_ms: 0.0,
-            message: "无效的探测地址".into(),
-        };
+        return fail(None, "无效的探测地址");
     };
     let started = Instant::now();
     let outcome = timeout(limit, probe_inner(proxy_port, &target)).await;
-    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let latency = Some(elapsed_ms(started));
     match outcome {
-        Ok(Ok(())) => ProbeResult {
-            ok: true,
-            latency_ms,
-            message: "通".into(),
-        },
-        Ok(Err(message)) => ProbeResult {
-            ok: false,
-            latency_ms,
-            message,
-        },
-        Err(_) => ProbeResult {
-            ok: false,
-            latency_ms,
-            message: "超时".into(),
-        },
+        Ok(Ok(())) => ok(latency),
+        Ok(Err(message)) => fail(latency, message),
+        Err(_) => fail(latency, "超时"),
+    }
+}
+
+/// `ssh -L`: ssh accepts on the local port and then asks the server to open
+/// the target; when the server cannot reach it, ssh closes our connection
+/// right away. A connection that stays open (or gets a banner) is working.
+pub async fn probe_local_forward(port: u16, target: &str) -> ProbeResult {
+    let started = Instant::now();
+    let mut sock = match timeout(
+        LOCAL_CONNECT_TIMEOUT,
+        TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    {
+        Ok(Ok(sock)) => sock,
+        _ => return fail(None, format!("本地端口 {port} 未监听")),
+    };
+    let mut buf = [0u8; 1];
+    match timeout(FORWARD_SETTLE, sock.read(&mut buf)).await {
+        // The service spoke first (ssh/mysql/redis banner…): a real round trip.
+        Ok(Ok(n)) if n > 0 => ok(Some(elapsed_ms(started))),
+        // Silent services (HTTP waits for a request) keep the line open.
+        Err(_) => ok(None),
+        Ok(_) => fail(None, format!("服务器无法连接 {target}")),
+    }
+}
+
+/// `ssh -R`: checks that the local service is up, then connects to the
+/// published address from this machine.
+pub async fn probe_remote_forward(
+    local_port: u16,
+    public_host: &str,
+    remote_port: u16,
+) -> ProbeResult {
+    let local = timeout(
+        LOCAL_CONNECT_TIMEOUT,
+        TcpStream::connect(("127.0.0.1", local_port)),
+    )
+    .await;
+    if !matches!(local, Ok(Ok(_))) {
+        return fail(None, format!("本地 {local_port} 端口没有服务在运行"));
+    }
+    let started = Instant::now();
+    match timeout(
+        PROBE_TIMEOUT,
+        TcpStream::connect((public_host, remote_port)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => ok(Some(elapsed_ms(started))),
+        _ => fail(
+            None,
+            format!(
+                "本机访问不到 {}:{remote_port}（检查服务器防火墙 / sshd 的 GatewayPorts）",
+                host_for_url(public_host)
+            ),
+        ),
+    }
+}
+
+/// Bracket IPv6 literals for use in `host:port` / URLs.
+pub fn host_for_url(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
     }
 }
 
@@ -231,6 +307,66 @@ mod tests {
         let r = run_probe(port, "http://example.com/", PROBE_TIMEOUT).await;
         assert!(!r.ok);
         assert!(r.message.contains("5"), "{}", r.message);
+    }
+
+    #[tokio::test]
+    async fn local_forward_detects_closed_channel() {
+        // Accepts then closes immediately: what ssh does when the server
+        // cannot reach the target.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (s, _) = listener.accept().await.unwrap();
+                drop(s);
+            }
+        });
+        let r = probe_local_forward(port, "10.0.0.1:80").await;
+        assert!(!r.ok, "{r:?}");
+        assert!(r.message.contains("10.0.0.1:80"));
+    }
+
+    #[tokio::test]
+    async fn local_forward_accepts_banner() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            s.write_all(b"SSH-2.0-test\r\n").await.unwrap();
+            sleep_forever().await;
+        });
+        let r = probe_local_forward(port, "x:22").await;
+        assert!(r.ok && r.latency_ms.is_some(), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn remote_forward_checks_local_service_first() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let r = probe_remote_forward(port, "127.0.0.1", 1).await;
+        assert!(!r.ok && r.message.contains("没有服务"), "{r:?}");
+
+        // Local service up and "published" port reachable.
+        let local = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let r = probe_remote_forward(
+            local.local_addr().unwrap().port(),
+            "127.0.0.1",
+            public.local_addr().unwrap().port(),
+        )
+        .await;
+        assert!(r.ok, "{r:?}");
+    }
+
+    #[test]
+    fn brackets_ipv6() {
+        assert_eq!(host_for_url("::1"), "[::1]");
+        assert_eq!(host_for_url("example.com"), "example.com");
+    }
+
+    async fn sleep_forever() {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
     }
 
     #[tokio::test]

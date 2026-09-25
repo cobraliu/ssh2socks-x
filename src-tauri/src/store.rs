@@ -63,6 +63,9 @@ mod tests {
         let t = Tunnel {
             name: "n".into(),
             host: "h".into(),
+            kind: crate::models::TunnelKind::Socks,
+            remote_port: 0,
+            target_host: "127.0.0.1".into(),
             port: 1080,
             probe_url: "http://x".into(),
             auto_reconnect: true,

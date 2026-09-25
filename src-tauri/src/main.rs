@@ -15,7 +15,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager as _, RunEvent, State, WindowEvent};
 
-use models::{Tunnel, TunnelView, DEFAULT_PROBE_URL};
+use models::{Tunnel, TunnelKind, TunnelView, DEFAULT_PROBE_URL};
 use ssh_config::HostEntry;
 use tunnel::Manager;
 
@@ -33,7 +33,10 @@ struct TunnelInput {
     id: Option<String>,
     name: String,
     host: String,
+    kind: TunnelKind,
     port: u16,
+    remote_port: u16,
+    target_host: String,
     probe_url: String,
     auto_reconnect: bool,
 }
@@ -49,8 +52,8 @@ fn list_hosts() -> Vec<HostEntry> {
 }
 
 #[tauri::command]
-fn suggest_port(mgr: Mgr) -> u16 {
-    mgr.suggest_port()
+fn suggest_port(mgr: Mgr, start: u16) -> u16 {
+    mgr.suggest_port(start)
 }
 
 #[tauri::command]
@@ -68,8 +71,15 @@ fn save_tunnel(mgr: Mgr, input: TunnelInput) -> Result<(), String> {
     if name.is_empty() {
         return Err("请填写隧道名称。".into());
     }
-    if input.port == 0 {
+    if input.port == 0 || (input.kind != TunnelKind::Socks && input.remote_port == 0) {
         return Err("端口必须在 1–65535 之间。".into());
+    }
+    let target_host = match input.target_host.trim() {
+        "" => "127.0.0.1".to_string(),
+        h => h.trim_start_matches('[').trim_end_matches(']').to_string(),
+    };
+    if target_host.contains(char::is_whitespace) {
+        return Err("目标地址格式不正确。".into());
     }
     let probe_url = match input.probe_url.trim() {
         "" => DEFAULT_PROBE_URL.to_string(),
@@ -78,7 +88,10 @@ fn save_tunnel(mgr: Mgr, input: TunnelInput) -> Result<(), String> {
     mgr.upsert(Tunnel {
         name,
         host,
+        kind: input.kind,
         port: input.port,
+        remote_port: input.remote_port,
+        target_host,
         probe_url,
         auto_reconnect: input.auto_reconnect,
         id: input.id.unwrap_or_else(models::new_id),
@@ -108,6 +121,13 @@ fn start_all(mgr: Mgr) {
 #[tauri::command]
 fn stop_all(mgr: Mgr) {
     mgr.stop_all();
+}
+
+#[tauri::command]
+async fn open_in_browser(mgr: Mgr<'_>, id: String) -> Result<String, String> {
+    let url = mgr.browser_url(&id).await?;
+    platform::open_url(&url).map_err(|e| format!("无法打开浏览器：{e}"))?;
+    Ok(url)
 }
 
 #[tauri::command]
@@ -205,6 +225,7 @@ fn main() {
             start_all,
             stop_all,
             tunnel_logs,
+            open_in_browser,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ssh2socks");

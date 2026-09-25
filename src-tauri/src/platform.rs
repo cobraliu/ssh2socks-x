@@ -112,3 +112,49 @@ fn decode_fallback(bytes: &[u8]) -> String {
 fn decode_fallback(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
+
+/// Open `url` in the default browser without blocking.
+#[cfg(windows)]
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (verb, file) = (wide("open"), wide(url));
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Values <= 32 are errors (documented ShellExecute contract).
+    if rc as isize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "ShellExecute 返回 {}",
+            rc as isize
+        )))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(program)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    // Reap it in the background so it does not linger as a zombie.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
