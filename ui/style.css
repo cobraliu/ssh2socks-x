@@ -378,3 +378,15 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
   .row { grid-template-columns: 84px 1fr 0 0 minmax(90px, 1fr) 220px; }
   .row > :nth-child(3), .row > :nth-child(4) { visibility: hidden; }
 }
+
+/* ---- key generation / import ---- */
+.wide-dialog { width: min(620px, calc(100vw - 32px)); }
+dialog textarea { width: 100%; resize: vertical; }
+dialog .templates { margin-top: 6px; }
+.small { font-size: 12px; }
+.steps { list-style: none; margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 13px; }
+.steps li { display: grid; grid-template-columns: 18px 72px 1fr; gap: 6px; padding: 2px 0; }
+.steps .mark.ok { color: var(--green); }
+.steps .mark.bad { color: var(--red); }
+.steps .detail { color: var(--muted); word-break: break-all; }
+.steps + .help { margin-top: 6px; }

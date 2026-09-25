@@ -1,6 +1,6 @@
 [package]
 name = "ssh2socks"
-version = "0.4.0"
+version = "0.5.0"
 description = "跨平台的 SSH -> SOCKS5 代理可视化管理工具"
 license = "Apache-2.0"
 edition = "2021"
@@ -19,6 +19,10 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
+ssh-key = { version = "0.6", features = ["crypto", "encryption", "getrandom"] }
+rsa = "0.9"
+ed25519-dalek = "2"
+curve25519-dalek = "4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -45,3 +49,7 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# RSA key generation is unbearably slow unoptimized; keep tests quick.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

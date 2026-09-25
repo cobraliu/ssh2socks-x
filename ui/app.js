@@ -367,6 +367,7 @@ async function showView(name) {
   for (const tab of document.querySelectorAll(".tab")) tab.classList.toggle("active", tab.dataset.view === name);
   for (const v of ["tunnels", "config", "keys"]) $(`view-${v}`).hidden = v !== name;
   $("tunnel-actions").hidden = name !== "tunnels";
+  $("key-actions").hidden = name !== "keys";
   if (name === "config") loadConfig();
   if (name === "keys") loadKeys();
 }
@@ -428,6 +429,180 @@ function showKey(key) {
   $("key-text").value = key.public_key;
   $("key-dialog").showModal();
   $("key-text").select();
+}
+
+// ---- generate / import keys ------------------------------------------------------
+// Private-key files are named `name`, public ones `name.pub`, both in ~/.ssh.
+const NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+
+/// Client-side name check; the backend repeats it against the real files.
+function nameProblem(name) {
+  if (!name) return "请填写文件名。";
+  if (!NAME_RE.test(name)) return "文件名只能包含字母、数字、点、下划线和减号，且不能以点开头。";
+  if (name.endsWith(".pub")) return "文件名不需要带 .pub，公钥会自动保存为「文件名.pub」。";
+  if (keys.some((k) => k.name === name)) return `「${name}」已存在，请换一个文件名。`;
+  return "";
+}
+
+function showError(id, message) {
+  $(id).textContent = message;
+  $(id).hidden = !message;
+}
+
+let genNameTouched = false;
+
+async function openGenerate() {
+  genNameTouched = false;
+  $("gen-form").reset();
+  showError("gen-error", "");
+  await onGenKindChange();
+  $("gen-dialog").showModal();
+  $("gen-name").focus();
+}
+
+const genKind = () => document.querySelector('input[name="gen-kind"]:checked').value;
+
+async function onGenKindChange() {
+  const rsa = genKind() === "rsa";
+  for (const node of document.querySelectorAll("[data-rsa]")) node.hidden = !rsa;
+  const d = await call("key_defaults", { kind: genKind() });
+  // Follow the type (id_ed25519 ↔ id_rsa) until the user types a name.
+  if (!genNameTouched) $("gen-name").value = d.name;
+  if (!$("gen-comment").value) $("gen-comment").value = d.comment;
+  onGenNameInput();
+}
+
+function onGenNameInput() {
+  const name = $("gen-name").value.trim();
+  $("gen-where").textContent = name ? `将创建 ~/.ssh/${name} 和 ${name}.pub` : "";
+  showError("gen-error", name ? nameProblem(name) : "");
+}
+
+async function submitGenerate() {
+  const name = $("gen-name").value.trim();
+  const problem = nameProblem(name);
+  if (problem) return showError("gen-error", problem);
+  if ($("gen-pass").value !== $("gen-pass2").value) return showError("gen-error", "两次输入的口令不一致。");
+  const kind = genKind();
+  const ok = $("gen-ok");
+  ok.disabled = true;
+  ok.textContent = "生成中…";
+  try {
+    const key = await invoke("generate_key", {
+      input: {
+        name,
+        kind,
+        bits: kind === "rsa" ? Number(document.querySelector('input[name="gen-bits"]:checked').value) : null,
+        comment: $("gen-comment").value.trim(),
+        passphrase: $("gen-pass").value,
+      },
+    });
+    $("gen-dialog").close();
+    await loadKeys();
+    toast(`已生成 ${key.name}`);
+    showKey(key);
+  } catch (err) {
+    showError("gen-error", String(err));
+  } finally {
+    ok.disabled = false;
+    ok.textContent = "生成";
+  }
+}
+
+let importChecked = false; // the current inputs passed every check
+
+function openImport() {
+  $("import-form").reset();
+  resetImportCheck();
+  $("import-dialog").showModal();
+}
+
+function resetImportCheck() {
+  importChecked = false;
+  $("imp-ok").disabled = true;
+  $("imp-steps").hidden = true;
+  $("imp-summary").hidden = true;
+  showError("imp-error", "");
+  const name = $("imp-name").value.trim();
+  $("imp-where").textContent = name ? `将保存为 ~/.ssh/${name} 和 ${name}.pub` : "";
+}
+
+function importInput() {
+  return {
+    name: $("imp-name").value.trim(),
+    private_key: $("imp-private").value,
+    public_key: $("imp-public").value,
+    passphrase: $("imp-pass").value,
+  };
+}
+
+async function pickImportFiles(files) {
+  for (const file of files) {
+    if (file.size > 64 * 1024) {
+      showError("imp-error", `${file.name} 太大了，不像是密钥文件。`);
+      continue;
+    }
+    const text = await file.text();
+    if (file.name.endsWith(".pub") || /^(ssh-|ecdsa-|sk-)/.test(text.trim())) {
+      $("imp-public").value = text.trim();
+    } else {
+      $("imp-private").value = text.trim();
+      // Default to the source file name; the duplicate check still applies.
+      if (!$("imp-name").value.trim()) $("imp-name").value = file.name.replace(/\.(pem|key|txt)$/i, "");
+    }
+  }
+  $("imp-file").value = "";
+  resetImportCheck();
+}
+
+async function checkImport() {
+  const input = importInput();
+  const problem = nameProblem(input.name);
+  resetImportCheck();
+  const btn = $("imp-check");
+  btn.disabled = true;
+  btn.textContent = "校验中…";
+  try {
+    const report = await invoke("check_key_import", { input });
+    const list = $("imp-steps");
+    list.replaceChildren(
+      ...report.steps.map((step) => {
+        const li = el("li");
+        li.append(
+          el("span", `mark ${step.ok ? "ok" : "bad"}`, step.ok ? "✓" : "✗"),
+          el("span", "", step.title),
+          el("span", "detail", step.detail),
+        );
+        return li;
+      }),
+    );
+    list.hidden = false;
+    $("imp-summary").textContent = report.summary;
+    $("imp-summary").hidden = !report.summary;
+    importChecked = report.ok && !problem;
+    $("imp-ok").disabled = !importChecked;
+    if (report.ok && problem) showError("imp-error", problem);
+    return importChecked;
+  } catch (err) {
+    showError("imp-error", String(err));
+    return false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "校验";
+  }
+}
+
+async function submitImport() {
+  if (!importChecked && !(await checkImport())) return;
+  try {
+    const key = await invoke("import_key", { input: importInput() });
+    $("import-dialog").close();
+    await loadKeys();
+    toast(`已导入 ${key.name}`);
+    showKey(key);
+  } catch (err) {
+    showError("imp-error", String(err));
+  }
 }
 
 // ---- ssh config view -----------------------------------------------------------
@@ -644,6 +819,31 @@ for (const btn of document.querySelectorAll("[data-tpl]")) {
   });
 }
 $("key-copy").addEventListener("click", () => shownKey && copyKey(shownKey));
+$("key-generate").addEventListener("click", openGenerate);
+$("key-import").addEventListener("click", openImport);
+for (const radio of document.querySelectorAll('input[name="gen-kind"]')) {
+  radio.addEventListener("change", onGenKindChange);
+}
+$("gen-name").addEventListener("input", () => {
+  genNameTouched = true;
+  onGenNameInput();
+});
+$("gen-cancel").addEventListener("click", () => $("gen-dialog").close());
+$("gen-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitGenerate();
+});
+$("imp-pick").addEventListener("click", () => $("imp-file").click());
+$("imp-file").addEventListener("change", () => pickImportFiles([...$("imp-file").files]));
+for (const id of ["imp-private", "imp-public", "imp-pass", "imp-name"]) {
+  $(id).addEventListener("input", resetImportCheck);
+}
+$("imp-check").addEventListener("click", checkImport);
+$("imp-cancel").addEventListener("click", () => $("import-dialog").close());
+$("import-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitImport();
+});
 
 $("add").addEventListener("click", () => openEditor(null));
 $("start-all").addEventListener("click", () => call("start_all"));

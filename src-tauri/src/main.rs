@@ -1,6 +1,7 @@
 // No console window next to the GUI on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod keygen;
 mod keys;
 mod models;
 mod platform;
@@ -142,6 +143,56 @@ fn tunnel_logs(mgr: Mgr, id: String) -> Vec<String> {
 #[tauri::command]
 fn list_keys() -> Vec<keys::KeyInfo> {
     keys::list_keys()
+}
+
+#[derive(Serialize)]
+struct KeyDefaults {
+    name: String,
+    comment: String,
+}
+
+/// Unused file name for a new key (`id_ed25519`, `id_rsa_2`…) and the
+/// usual `user@host` comment.
+#[tauri::command]
+fn key_defaults(kind: String) -> Result<KeyDefaults, String> {
+    let dir = ssh_config::ssh_dir().ok_or("找不到用户主目录")?;
+    Ok(KeyDefaults {
+        name: keygen::suggest_name(
+            &dir,
+            if kind == "rsa" {
+                "id_rsa"
+            } else {
+                "id_ed25519"
+            },
+        ),
+        comment: keygen::default_comment(),
+    })
+}
+
+/// Key generation and the import checks (bcrypt, RSA) take a while, so
+/// they run off the main thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce(&std::path::Path) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let dir = ssh_config::ssh_dir().ok_or("找不到用户主目录")?;
+    tauri::async_runtime::spawn_blocking(move || f(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn generate_key(input: keygen::GenerateInput) -> Result<keys::KeyInfo, String> {
+    blocking(move |dir| keygen::generate(dir, &input)).await
+}
+
+#[tauri::command]
+async fn check_key_import(input: keygen::ImportInput) -> Result<keygen::ImportReport, String> {
+    blocking(move |dir| Ok(keygen::check_import(dir, &input))).await
+}
+
+#[tauri::command]
+async fn import_key(input: keygen::ImportInput) -> Result<keys::KeyInfo, String> {
+    blocking(move |dir| keygen::import(dir, &input)).await
 }
 
 #[derive(Serialize)]
@@ -319,6 +370,10 @@ fn main() {
             tunnel_logs,
             open_in_browser,
             list_keys,
+            key_defaults,
+            generate_key,
+            check_key_import,
+            import_key,
             list_ssh_hosts,
             save_ssh_host,
             delete_ssh_host,

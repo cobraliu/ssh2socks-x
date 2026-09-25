@@ -25,6 +25,10 @@
       <button id="stop-all" class="btn">全部停止</button>
       <button id="add" class="btn primary">＋ 新建隧道</button>
     </div>
+    <div class="actions" id="key-actions" hidden>
+      <button id="key-import" class="btn">导入密钥…</button>
+      <button id="key-generate" class="btn primary">＋ 生成密钥</button>
+    </div>
   </header>
 
   <main id="view-tunnels" class="view tunnels">
@@ -124,7 +128,7 @@
       <div id="key-list" class="tbody"></div>
       <div id="key-empty" class="empty" hidden>
         <p>没有找到公钥（<code>~/.ssh/*.pub</code>）</p>
-        <p class="muted">可以在终端运行 <code>ssh-keygen -t ed25519</code> 生成一对密钥。</p>
+        <p class="muted">点右上角「生成密钥」创建一对新密钥，或「导入密钥」使用已有的私钥。</p>
       </div>
     </section>
   </main>
@@ -185,6 +189,75 @@
       <div class="dialog-actions">
         <button value="close" class="btn">关闭</button>
         <button type="button" id="key-copy" class="btn primary">复制公钥</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="gen-dialog">
+    <form id="gen-form" method="dialog">
+      <h2>生成密钥对</h2>
+      <div class="grid">
+        <span class="label">类型</span>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="gen-kind" value="ed25519" checked /> Ed25519（推荐）</label>
+          <label><input type="radio" name="gen-kind" value="rsa" /> RSA</label>
+        </div>
+        <label for="gen-bits" data-rsa>长度</label>
+        <div class="seg" data-rsa role="radiogroup" id="gen-bits">
+          <label><input type="radio" name="gen-bits" value="2048" /> 2048</label>
+          <label><input type="radio" name="gen-bits" value="3072" checked /> 3072</label>
+          <label><input type="radio" name="gen-bits" value="4096" /> 4096</label>
+        </div>
+        <label for="gen-name">文件名</label>
+        <input id="gen-name" autocomplete="off" spellcheck="false" />
+        <span></span>
+        <p id="gen-where" class="help mono"></p>
+        <label for="gen-comment">注释</label>
+        <input id="gen-comment" autocomplete="off" spellcheck="false" placeholder="例如 me@laptop，便于在服务器上认出这把钥匙" />
+        <label for="gen-pass">口令</label>
+        <input id="gen-pass" type="password" autocomplete="new-password" placeholder="可留空" />
+        <label for="gen-pass2">确认口令</label>
+        <input id="gen-pass2" type="password" autocomplete="new-password" />
+        <span></span>
+        <p class="help">设置口令后，本工具建立隧道时无法输入口令，需要先用 <code>ssh-add</code> 把密钥加入 ssh-agent。</p>
+      </div>
+      <p id="gen-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="gen-cancel" class="btn">取消</button>
+        <button type="submit" id="gen-ok" class="btn primary">生成</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="import-dialog" class="wide-dialog">
+    <form id="import-form" method="dialog">
+      <h2>导入密钥对</h2>
+      <div class="grid">
+        <span class="label">私钥</span>
+        <div>
+          <textarea id="imp-private" class="mono" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…"></textarea>
+          <div class="templates">
+            <button type="button" class="btn small" id="imp-pick">选择文件…</button>
+            <span class="muted small">可同时选中私钥和 .pub 公钥两个文件</span>
+          </div>
+          <input type="file" id="imp-file" multiple hidden />
+        </div>
+        <span class="label">公钥（可选）</span>
+        <textarea id="imp-public" class="mono" rows="2" spellcheck="false" placeholder="ssh-ed25519 AAAA…  留空则从私钥导出"></textarea>
+        <label for="imp-pass">私钥口令</label>
+        <input id="imp-pass" type="password" autocomplete="off" placeholder="私钥未加密可留空" />
+        <label for="imp-name">保存为</label>
+        <input id="imp-name" autocomplete="off" spellcheck="false" placeholder="文件名，例如 id_work" />
+        <span></span>
+        <p id="imp-where" class="help mono"></p>
+      </div>
+      <ul id="imp-steps" class="steps" hidden></ul>
+      <p id="imp-summary" class="help mono" hidden></p>
+      <p id="imp-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="imp-cancel" class="btn">取消</button>
+        <button type="button" id="imp-check" class="btn">校验</button>
+        <button type="submit" id="imp-ok" class="btn primary" disabled>导入</button>
       </div>
     </form>
   </dialog>
