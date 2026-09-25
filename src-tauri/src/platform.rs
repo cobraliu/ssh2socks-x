@@ -248,3 +248,78 @@ pub fn open_in_editor(path: &std::path::Path) -> std::io::Result<()> {
     std::thread::spawn(move || child.wait());
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    /// Start PowerShell in a job, and have it start a grandchild the way
+    /// ssh starts `ssh -W` for ProxyJump. Returns the tree and a handle to
+    /// the grandchild (opened before anything is killed, so its pid cannot
+    /// be reused under us).
+    async fn tree_with_grandchild(tag: &str) -> (Child, ProcTree, HANDLE) {
+        let out = std::env::temp_dir().join(format!("ssh2socks-job-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        let mut cmd = Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$p = Start-Process -FilePath ping -ArgumentList '-n','3600','127.0.0.1' \
+             -PassThru -WindowStyle Hidden; \
+             Set-Content -Path $env:TREE_OUT -Value $p.Id; Wait-Process -Id $p.Id",
+        ])
+        .env("TREE_OUT", &out)
+        .kill_on_drop(true);
+        hide_console(&mut cmd);
+        let child = cmd.spawn().unwrap();
+        let tree = adopt(&child);
+        assert_ne!(tree.job, 0, "could not put the process in a job");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let pid: u32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&out)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
+        let _ = std::fs::remove_file(&out);
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(!handle.is_null(), "grandchild {pid} not found");
+        (child, tree, handle)
+    }
+
+    fn ends_within_5s(handle: HANDLE) -> bool {
+        let ended = unsafe { WaitForSingleObject(handle, 5_000) } == WAIT_OBJECT_0;
+        unsafe { CloseHandle(handle) };
+        ended
+    }
+
+    #[tokio::test]
+    async fn kill_ends_the_whole_tree() {
+        let (_child, tree, grandchild) = tree_with_grandchild("kill").await;
+        tree.kill();
+        assert!(ends_within_5s(grandchild));
+    }
+
+    /// What happens when the app dies: nothing calls kill, the job handle is
+    /// just closed, and KILL_ON_JOB_CLOSE takes the tree down.
+    #[tokio::test]
+    async fn closing_the_job_ends_the_whole_tree() {
+        let (_child, tree, grandchild) = tree_with_grandchild("close").await;
+        let job = tree.job;
+        std::mem::forget(tree);
+        unsafe { CloseHandle(job as HANDLE) };
+        assert!(ends_within_5s(grandchild));
+    }
+}

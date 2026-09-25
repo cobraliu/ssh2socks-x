@@ -22,6 +22,7 @@ use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
 
 use crate::models::{ProbeResult, Tunnel, TunnelKind, TunnelState, TunnelView};
+use crate::progress::{self, Progress};
 use crate::{platform, probe, store};
 
 const PORT_POLL: Duration = Duration::from_millis(300);
@@ -36,6 +37,8 @@ const WAIT_NOTICE: Duration = Duration::from_secs(10);
 /// …and give up (then retry) after this long. `ConnectTimeout` only covers
 /// the TCP connect, not a hung ProxyCommand / jump host / handshake.
 const CONNECT_DEADLINE: Duration = Duration::from_secs(45);
+/// How long to wait for ssh's last stderr lines once it has exited.
+const STDERR_DRAIN: Duration = Duration::from_secs(1);
 
 pub const EVENT_CHANGED: &str = "tunnel-changed";
 pub const EVENT_LOG: &str = "tunnel-log";
@@ -92,6 +95,9 @@ pub fn ssh_args(t: &Tunnel) -> Vec<String> {
     let mut args: Vec<String> = [
         "-N",
         "-T",
+        // Verbose output tells how far a connection got (see `progress`);
+        // it is parsed, not logged.
+        "-v",
         "-o",
         "ExitOnForwardFailure=yes",
         "-o",
@@ -119,13 +125,16 @@ pub fn ssh_args(t: &Tunnel) -> Vec<String> {
             format!("127.0.0.1:{}:{}:{}", t.port, target, t.remote_port),
         ]),
         TunnelKind::Remote => args.extend([
-            "-v".into(),
             "-R".into(),
             format!("0.0.0.0:{}:127.0.0.1:{}", t.remote_port, t.port),
         ]),
     }
     args.push(t.host.clone());
     args
+}
+
+fn progress_of(p: &Mutex<Progress>) -> std::sync::MutexGuard<'_, Progress> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Human-readable forward description, also used in logs.
@@ -465,10 +474,11 @@ impl Manager {
         attempts: &mut u32,
     ) -> Outcome {
         let id = tunnel.id.as_str();
+        let target = resolve_hostname(&self.ssh_program, &tunnel.host).await;
+        let progress = Arc::new(Mutex::new(Progress::new(&target)));
         if tunnel.kind == TunnelKind::Remote {
-            let host = resolve_hostname(&self.ssh_program, &tunnel.host).await;
             if let Some(rt) = self.lock().runtimes.get_mut(id) {
-                rt.public_host = Some(host);
+                rt.public_host = Some(target);
             }
             if port_free(tunnel.port) {
                 self.log(
@@ -510,23 +520,28 @@ impl Manager {
         let tree = platform::adopt(&child);
         self.set_pid(id, child.id());
         let (forwarded_tx, mut forwarded) = watch::channel(false);
+        let mut stderr_done = None;
         if let Some(stderr) = child.stderr.take() {
             let me = Arc::clone(self);
             let id = id.to_string();
-            tauri::async_runtime::spawn(async move {
+            let progress = Arc::clone(&progress);
+            stderr_done = Some(tauri::async_runtime::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut buf = Vec::new();
                 while matches!(reader.read_until(b'\n', &mut buf).await, Ok(n) if n > 0) {
                     let line = platform::decode(&buf);
                     let line = line.trim_end();
+                    let version = progress_of(&progress).feed(line);
+                    if let Some(version) = version {
+                        me.log(&id, &version);
+                    }
                     if line.starts_with("debug") {
-                        // `-v` chatter (remote forwards only).
                         if line.contains("remote forward success") {
                             let _ = forwarded_tx.send(true);
                         } else if line.contains("remote forward failure") {
                             me.note(&id, line.trim_start_matches("debug1: "));
                         }
-                    } else if !line.trim().is_empty() {
+                    } else if !line.trim().is_empty() && !progress::is_chatter(line) {
                         me.note(&id, line);
                         if let Some(hint) = hint_for(line) {
                             me.log(&id, &hint);
@@ -534,7 +549,7 @@ impl Manager {
                     }
                     buf.clear();
                 }
-            });
+            }));
         }
 
         // Phase 1: wait for the forward to come up.
@@ -567,28 +582,62 @@ impl Manager {
             if !matches!(event, Event::Tick) {
                 break event;
             }
-            let waited = started.elapsed();
-            if waited >= CONNECT_DEADLINE {
+            let waited = started.elapsed().as_secs();
+            let (step, hint, last) = {
+                let p = progress_of(&progress);
+                (p.describe(), p.hint(), p.last_debug().to_string())
+            };
+            if started.elapsed() >= CONNECT_DEADLINE {
                 self.note(
                     id,
-                    &tr!("等待 {}s 仍未连上（网络不通、跳板机/ProxyCommand 卡住或服务器无响应），结束本次尝试", "Still not connected after {}s (network unreachable, jump host / ProxyCommand stuck, or no response from the server); giving up on this attempt",
-                        waited.as_secs()
+                    &tr!(
+                        "等待 {}s 仍未连上，卡在：{}。结束本次尝试",
+                        "Still not connected after {}s, stuck at: {}. Giving up on this attempt",
+                        waited,
+                        step
                     ),
                 );
+                if let Some(hint) = hint {
+                    self.log(id, &hint);
+                }
+                if !last.is_empty() {
+                    self.log(id, &tr!("ssh 最后的输出：{}", "Last ssh output: {}", last));
+                }
                 let _ = self.kill(id, child, tree).await;
                 return Outcome::Failed;
             }
             self.note(
                 id,
                 &tr!(
-                    "仍在等待 ssh 建立连接…（已 {}s）",
-                    "Still waiting for ssh to connect… ({}s so far)",
-                    waited.as_secs()
+                    "仍在等待 ssh 建立连接…（已 {}s）当前：{}",
+                    "Still waiting for ssh to connect… ({}s so far) now: {}",
+                    waited,
+                    step
                 ),
             );
         };
         match event {
-            Event::Exited(status) => return self.exited(id, status),
+            Event::Exited(status) => {
+                // Let the last lines (ssh's error) arrive first. A ProxyJump
+                // helper may still hold the pipe open, hence the timeout.
+                if let Some(done) = stderr_done {
+                    let _ = timeout(STDERR_DRAIN, done).await;
+                }
+                // ssh's own error may be vague ("Connection reset"); say how
+                // far it got.
+                let (step, hint) = {
+                    let p = progress_of(&progress);
+                    (p.describe(), p.hint())
+                };
+                self.log(
+                    id,
+                    &tr!("断开前的进度：{}", "Progress before it ended: {}", step),
+                );
+                if let Some(hint) = hint {
+                    self.log(id, &hint);
+                }
+                return self.exited(id, status);
+            }
             Event::Stop => return self.kill(id, child, tree).await,
             Event::Ready | Event::Probe | Event::Tick => {}
         }
@@ -874,9 +923,10 @@ mod tests {
         };
         let args = ssh_args(&remote);
         assert_eq!(
-            &args[args.len() - 4..],
-            ["-v", "-R", "0.0.0.0:8080:127.0.0.1:3000", "myhost"]
+            &args[args.len() - 3..],
+            ["-R", "0.0.0.0:8080:127.0.0.1:3000", "myhost"]
         );
+        assert!(args.contains(&"-v".to_string()));
     }
 
     #[test]
@@ -1086,6 +1136,70 @@ mod tests {
         assert_eq!(url, "http://127.0.0.1:18080/");
         mgr.stop("r");
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A connection that dies mid-way says how far it got, and ssh's `-v`
+    /// output itself stays out of the log.
+    #[cfg(unix)]
+    #[test]
+    fn reports_progress_when_ssh_gives_up() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        let dir = std::env::temp_dir().join(format!("ssh2socks-prog-{}", crate::models::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("ssh");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\n\
+             [ \"$1\" = -G ] && { echo 'hostname 10.76.0.73'; exit 0; }\n\
+             cat >&2 <<'EOF'\n\
+             OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2\n\
+             debug1: Executing proxy command: exec ssh -v -W '[10.76.0.73]:22' gate\n\
+             debug1: Connecting to 121.43.96.239 [121.43.96.239] port 22.\n\
+             debug1: Connection established.\n\
+             debug1: Authenticating to 121.43.96.239:22 as 'root'\n\
+             debug1: expecting SSH2_MSG_KEX_ECDH_REPLY\n\
+             client_loop: send disconnect: Connection reset\n\
+             EOF\n\
+             exit 255\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tunnel = Tunnel {
+            name: "p".into(),
+            host: "flabproxy".into(),
+            kind: crate::models::TunnelKind::Socks,
+            remote_port: 0,
+            target_host: "127.0.0.1".into(),
+            port: std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port(),
+            probe_url: String::new(),
+            auto_reconnect: false,
+            id: "p".into(),
+        };
+        let mgr = Manager::with_program(None, vec![tunnel], fake.to_str().unwrap());
+        mgr.start("p");
+        let logs = || mgr.logs("p").join("\n");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !logs().contains("断开前的进度") {
+            assert!(Instant::now() < deadline, "no progress line:\n{}", logs());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let logs = logs();
+        assert!(
+            logs.contains("断开前的进度：已向跳板机 121.43.96.239:22 发出密钥交换请求"),
+            "{logs}"
+        );
+        assert!(logs.contains("OpenSSH_for_Windows_9.5p1"), "{logs}");
+        assert!(logs.contains("Connection reset"), "{logs}");
+        assert!(logs.contains("MTU"), "{logs}");
+        assert!(!logs.contains("debug1"), "{logs}");
+        mgr.stop("p");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

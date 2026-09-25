@@ -8,6 +8,7 @@ mod keys;
 mod models;
 mod platform;
 mod probe;
+mod progress;
 #[cfg(unix)]
 mod reaper;
 mod ssh_config;

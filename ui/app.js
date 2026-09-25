@@ -874,7 +874,7 @@ listen("tunnel-log", ({ payload }) => {
 });
 
 // ---- language + theme ------------------------------------------------------------
-const prefs = { lang: "zh", theme: "system" };
+const prefs = { lang: "en", theme: "system" };
 const THEMES = {
   system: ["◐", "主题：跟随系统"],
   light: ["☀", "主题：浅色"],
@@ -912,16 +912,18 @@ async function savePrefs() {
 }
 
 async function initPrefs() {
+  let saved = null;
   try {
-    const saved = await invoke("get_prefs");
-    prefs.lang = saved.lang || (/^zh\b/i.test(navigator.language) ? "zh" : "en");
+    saved = await invoke("get_prefs");
+    prefs.lang = saved.lang || "en";
     prefs.theme = THEMES[saved.theme] ? saved.theme : "system";
-    applyLang();
-    // Tell the backend (messages, tray menu, window theme) what the UI chose.
-    if (!saved.lang || !saved.theme) await savePrefs();
-  } finally {
-    document.documentElement.dataset.ready = "";
+  } catch {
+    // Keep the defaults.
   }
+  applyLang();
+  document.documentElement.dataset.ready = "";
+  // Tell the backend (messages, tray menu, window theme) what the UI chose.
+  if (!saved?.lang || !saved?.theme) await savePrefs();
 }
 
 $("lang-toggle").addEventListener("click", () => {

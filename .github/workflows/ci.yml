@@ -1,6 +1,7 @@
 name: ci
 
 # check  : fmt + clippy + tests (Linux)
+# test   : clippy + tests on Windows and macOS (process trees, job objects)
 # build  : Windows / macOS (universal) / Linux bundles, uploaded as artifacts
 # release: on a v* tag, attach every bundle to a GitHub Release
 
@@ -43,8 +44,30 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: test-${{ matrix.os }}
+      - name: clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: test
+        working-directory: src-tauri
+        run: cargo test --locked
+
   build:
-    needs: check
+    needs: [check, test]
     strategy:
       fail-fast: false
       matrix:

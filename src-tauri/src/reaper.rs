@@ -272,7 +272,7 @@ fn terminate_if(_p: &Proc) -> bool {
     false
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
     use std::process::{Child, Command};
@@ -315,6 +315,7 @@ mod tests {
         Some(me)
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parses_names_with_parens() {
         let stat = "42 (a) b) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 12345 0 0";

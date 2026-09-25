@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-static ENGLISH: AtomicBool = AtomicBool::new(false);
+/// English until the user picks Chinese. Tests are written against the
+/// Chinese messages, so they start in Chinese.
+static ENGLISH: AtomicBool = AtomicBool::new(!cfg!(test));
 
 pub fn is_en() -> bool {
     ENGLISH.load(Ordering::Relaxed)
@@ -34,7 +36,7 @@ macro_rules! tr {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Prefs {
-    /// "zh", "en", or empty for "not chosen yet" (the UI then follows the OS).
+    /// "zh", "en", or empty for "not chosen yet" (English is used).
     #[serde(default)]
     pub lang: String,
     /// "system", "light" or "dark".

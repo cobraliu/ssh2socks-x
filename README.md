@@ -21,6 +21,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
   - Local forward: checks whether a forwarded connection is dropped right away (which happens when the server can't reach the target)
   - Remote forward: checks that the local service is running, then connects to `server:port` from this machine
 - Errors show up right away: every log line is timestamped, the list shows the latest error, and a connection that isn't up after 10 seconds is noted in the log. After 45 seconds the attempt is abandoned and retried
+- Shows where a connection is stuck: the log names the step (TCP connect, SSH version exchange, key exchange, login, or reaching the target through the jump host), which host it is waiting on (jump host or server), and likely causes. Connections that fail also record how far they got, and the ssh version is logged
 - **SSH config editor** ("SSH config" tab):
   - View, add, edit and delete hosts in `~/.ssh/config` (alias, hostname, user, port, identity file)
   - Connect directly, through a jump host (`ProxyJump`), or with a `ProxyCommand`. Templates cover a jump host, a SOCKS5 proxy, an HTTP proxy and ncat
@@ -34,7 +35,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
   - Each import is checked step by step, and the result of each step is shown: parse the private key → decrypt it with the passphrase → match it to the public key → sign with the private key and verify with the public key → encrypt with the public key and decrypt with the private key (RSA uses OAEP; Ed25519 is mapped to X25519 for a key exchange)
   - No duplicates: saving is refused if the file name is taken, or if the same key (same fingerprint) already exists under another name. Existing files are never overwritten
   - Private keys are saved with mode `600` (Linux / macOS)
-- English and Chinese interface, including error messages, logs and the tray menu. It follows the system language on first launch; switch with the "EN / 中" button at the top right
+- English and Chinese interface, including error messages, logs and the tray menu. English by default; switch with the "EN / 中" button at the top right
 - Light and dark themes: follow the system, or pick one with the theme button (◐ / ☀ / ☾) at the top right. Both choices are remembered
 - Lives in the system tray; closing the window keeps tunnels running
 - Each tunnel's ssh runs in its own Job Object (Windows) or process group (Linux / macOS). Stopping or retrying a tunnel also ends its `ProxyJump` / `ProxyCommand` helper processes, and everything is cleaned up on exit
