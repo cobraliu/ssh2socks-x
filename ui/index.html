@@ -31,6 +31,7 @@
         <button id="key-generate" class="btn primary">＋ 生成密钥</button>
       </div>
       <div class="prefs">
+        <label class="login-item" title="登录系统后自动在托盘中启动"><input id="login-item" type="checkbox" /> 开机时启动</label>
         <button id="lang-toggle" class="btn small" title="切换到英文">EN</button>
         <button id="theme-toggle" class="btn small icon" title="主题：跟随系统">◐</button>
       </div>
@@ -166,11 +167,34 @@
         <input id="probe" data-kinds="socks" autocomplete="off" />
         <span></span>
         <label class="check"><input id="auto" type="checkbox" /> 进程退出时自动重连</label>
+        <span></span>
+        <label class="check"><input id="auto-start" type="checkbox" /> 启动本程序时自动连接</label>
       </div>
       <p id="editor-error" class="error" hidden></p>
       <div class="dialog-actions">
         <button type="button" id="editor-cancel" class="btn">取消</button>
         <button type="submit" class="btn primary">确定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="use-dialog" class="wide-dialog">
+    <form method="dialog">
+      <h2 id="use-title">使用代理</h2>
+      <div class="use-section">
+        <div class="use-head">
+          <strong>系统代理</strong>
+          <button type="button" id="sysproxy-toggle" class="btn primary small">设为系统代理</button>
+        </div>
+        <p id="sysproxy-status" class="help"></p>
+      </div>
+      <div class="use-section">
+        <strong>终端 / 命令行</strong>
+        <p class="help" data-i18n-html="socks5h">用 <code>socks5h</code> 让域名也在服务器端解析。只对设置后启动的程序生效。</p>
+        <div id="snippets" class="snippets"></div>
+      </div>
+      <div class="dialog-actions">
+        <button value="close" class="btn">关闭</button>
       </div>
     </form>
   </dialog>

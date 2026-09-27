@@ -114,6 +114,11 @@ function buildRow(id) {
     const url = await call("open_in_browser", { id });
     toast(t("已在浏览器打开 {url}", { url }));
   });
+  const use = el("button", "btn small use");
+  use.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openUse(id);
+  });
   const edit = el("button", "btn small edit");
   const del = el("button", "btn small danger delete");
   toggle.addEventListener("click", (e) => {
@@ -129,7 +134,7 @@ function buildRow(id) {
     e.stopPropagation();
     confirmDelete(tunnels.get(id));
   });
-  ops.append(open, toggle, edit, del);
+  ops.append(open, use, toggle, edit, del);
 
   row.append(status, name, host, addr, health, ops);
   row.addEventListener("click", () => select(id));
@@ -146,6 +151,11 @@ function updateRow(v) {
   const [mapText, mapTitle] = mappingOf(v);
   const addr = row.querySelector(".addr");
   addr.replaceChildren(el("span", "tag", t(KINDS[v.kind]?.tag ?? v.kind)), el("span", "addr-text", mapText));
+  if (v.system_proxy) {
+    const tag = el("span", "tag on", t("系统代理"));
+    tag.title = t("系统代理当前指向此隧道");
+    addr.append(tag);
+  }
   addr.title = mapTitle;
   const open = row.querySelector(".open");
   open.hidden = v.kind === "socks";
@@ -157,6 +167,10 @@ function updateRow(v) {
   health.className = `cell health ${cls}`;
   row.querySelector(".toggle").textContent = isActive(v) ? t("停止") : t("连接");
   open.textContent = t("打开");
+  const use = row.querySelector(".use");
+  use.hidden = v.kind !== "socks";
+  use.textContent = t("使用…");
+  use.title = t("设为系统代理，或复制终端里的代理设置");
   open.title = t("在浏览器中打开");
   row.querySelector(".edit").textContent = t("编辑");
   row.querySelector(".delete").textContent = t("删除");
@@ -299,6 +313,7 @@ async function openEditor(view) {
   $("port").value = port;
   $("probe").value = view ? view.probe_url : probe;
   $("auto").checked = view ? view.auto_reconnect : true;
+  $("auto-start").checked = view ? view.auto_start : false;
   renderHosts();
   $("editor").showModal();
   $("search").focus();
@@ -329,6 +344,7 @@ async function submitEditor() {
     target_host: $("target").value,
     probe_url: $("probe").value,
     auto_reconnect: $("auto").checked,
+    auto_start: $("auto-start").checked,
   };
   try {
     await invoke("save_tunnel", { input });
@@ -339,6 +355,75 @@ async function submitEditor() {
   $("editor").close();
   await reload();
 }
+
+// ---- using a SOCKS proxy -------------------------------------------------------
+let useId = null;
+
+function snippetsFor(port) {
+  const url = `socks5h://127.0.0.1:${port}`;
+  return [
+    ["bash / zsh", `export ALL_PROXY=${url} all_proxy=${url}`],
+    ["PowerShell", `$env:ALL_PROXY="${url}"`],
+    ["cmd", `set ALL_PROXY=${url}`],
+    ["git", `git config --global http.proxy ${url}`],
+    [t("git 取消"), "git config --global --unset http.proxy"],
+    ["curl", `curl -x ${url} https://example.com`],
+  ];
+}
+
+function renderUse() {
+  const v = tunnels.get(useId);
+  if (!v) {
+    $("use-dialog").close();
+    return;
+  }
+  $("use-title").textContent = t("使用「{name}」", { name: v.name });
+  const button = $("sysproxy-toggle");
+  const status = $("sysproxy-status");
+  if (v.system_proxy) {
+    status.textContent = t("系统代理当前指向此隧道（SOCKS 127.0.0.1:{port}）。停止隧道或退出程序时会自动恢复原来的设置。", { port: v.port });
+    button.textContent = t("恢复原设置");
+    button.className = "btn small";
+    button.disabled = false;
+  } else {
+    status.textContent = isActive(v)
+      ? t("浏览器等跟随系统代理的程序会经过此隧道。原来的设置会被保存，停止隧道或退出程序时自动恢复。")
+      : t("隧道连接后才能设为系统代理。");
+    button.textContent = t("设为系统代理");
+    button.className = "btn primary small";
+    button.disabled = !isActive(v);
+  }
+  const list = $("snippets");
+  list.replaceChildren();
+  for (const [label, code] of snippetsFor(v.port)) {
+    const copy = el("button", "btn small", t("复制"));
+    copy.type = "button";
+    copy.addEventListener("click", async () => {
+      if (await copyText(code)) toast(t("已复制到剪贴板"));
+    });
+    list.append(el("span", "snippet-label", label), el("code", "snippet-code", code), copy);
+  }
+}
+
+function openUse(id) {
+  useId = id;
+  renderUse();
+  $("use-dialog").showModal();
+}
+
+$("sysproxy-toggle").addEventListener("click", async () => {
+  const v = tunnels.get(useId);
+  if (!v) return;
+  const button = $("sysproxy-toggle");
+  button.disabled = true;
+  try {
+    await call("set_system_proxy", { id: v.id, on: !v.system_proxy });
+    toast(v.system_proxy ? t("已恢复原来的系统代理设置") : t("已设为系统代理"));
+  } catch {
+    // call() showed the error.
+  }
+  renderUse();
+});
 
 // ---- confirmation ------------------------------------------------------------
 function ask(title, text, okLabel) {
@@ -868,6 +953,10 @@ $("editor-form").addEventListener("submit", (e) => {
 listen("tunnel-changed", ({ payload }) => {
   tunnels.set(payload.id, payload);
   updateRow(payload);
+  if (payload.id === useId && $("use-dialog").open) renderUse();
+});
+listen("login-item-changed", ({ payload }) => {
+  $("login-item").checked = payload;
 });
 listen("tunnel-log", ({ payload }) => {
   if (payload.id === selectedId) appendLog(payload.line);
@@ -937,5 +1026,15 @@ $("theme-toggle").addEventListener("click", () => {
   applyTheme();
   savePrefs();
 });
+
+$("login-item").addEventListener("change", async (e) => {
+  const want = e.target.checked;
+  try {
+    await call("set_launch_at_login", { enabled: want });
+  } catch {
+    e.target.checked = !want;
+  }
+});
+invoke("get_launch_at_login").then((on) => ($("login-item").checked = on), () => {});
 
 initPrefs().finally(reload);

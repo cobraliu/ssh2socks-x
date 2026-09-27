@@ -16,6 +16,12 @@ Rust + Tauri v2 实现，安装包/可执行文件只有几 MB，支持 Windows�
 - 首次连接新服务器时自动信任其主机密钥（`StrictHostKeyChecking=accept-new`），不再卡在 yes/no 确认；已记录的密钥如果变了仍会拒绝，并提示处理方法
 - 一键启动 / 停止、全部启动 / 全部停止
 - 断线自动重连（1s → 30s 指数退避），`ServerAliveInterval` 保活
+- 电脑从睡眠中唤醒、或换了网络（本机地址变化）时立即重连，不必等保活超时；断网后网络恢复时，正在等待重试的隧道立即重连，仍然连着的连接不受影响
+- **自动启动**：每条隧道可以设置「启动本程序时自动连接」；右上角（或托盘菜单）的「开机时启动」让程序登录后在托盘中启动。只会运行一个实例，再次打开程序会显示已运行的窗口
+- **使用 SOCKS 代理**（「使用…」按钮）：
+  - 一键设为系统代理。会先保存原来的设置，停止隧道、退出程序时自动恢复；程序崩溃的话下次启动时恢复。期间被别人改过的设置保持不动
+  - Windows：WinINet 设置（`socks=127.0.0.1:端口`，Edge、Chrome 和大多数程序会使用）；macOS：所有已启用网络服务的 SOCKS 代理（`networksetup`）；Linux：GNOME 系桌面（`gsettings`）
+  - 一键复制 bash / zsh、PowerShell、cmd、git、curl 的代理设置（`socks5h://`，域名也在服务器端解析）
 - 连通性探测，每 30 秒一次：
   - SOCKS：通过代理访问探测地址。`http://` 地址会完整发起一次 HTTP 请求；`https://` 地址只要 SOCKS CONNECT 成功就算连通（不做 TLS 握手）
   - 本地转发：检查转发出去的连接会不会被立即断开（服务器连不上目标时会断开）
@@ -78,7 +84,7 @@ GatewayPorts clientspecified   # 或 yes
 - macOS：`~/Library/Application Support/ssh2socks/tunnels.json`
 - Windows：`%APPDATA%\ssh2socks\tunnels.json`
 
-语言和主题保存在同一目录的 `settings.json` 中。
+语言和主题保存在同一目录的 `settings.json` 中。系统代理指向某条隧道期间，原来的设置保存在同目录的 `sysproxy.json` 中。
 
 ## 本地构建
 

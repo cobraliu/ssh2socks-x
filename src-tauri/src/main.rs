@@ -3,9 +3,11 @@
 
 #[macro_use]
 mod i18n;
+mod autostart;
 mod keygen;
 mod keys;
 mod models;
+mod netwatch;
 mod platform;
 mod probe;
 mod progress;
@@ -14,20 +16,24 @@ mod reaper;
 mod ssh_config;
 mod ssh_edit;
 mod store;
+mod sysproxy;
 mod tunnel;
+#[cfg(windows)]
+mod winreg;
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager as _, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager as _, RunEvent, State, WindowEvent};
 
 use models::{Tunnel, TunnelKind, TunnelView, DEFAULT_PROBE_URL};
 use ssh_config::HostEntry;
 use tunnel::Manager;
 
 const TRAY_ID: &str = "main";
+const EVENT_LOGIN_ITEM: &str = "login-item-changed";
 
 type Mgr<'a> = State<'a, Arc<Manager>>;
 
@@ -47,6 +53,8 @@ struct TunnelInput {
     target_host: String,
     probe_url: String,
     auto_reconnect: bool,
+    #[serde(default)]
+    auto_start: bool,
 }
 
 #[tauri::command]
@@ -111,6 +119,7 @@ fn save_tunnel(mgr: Mgr, input: TunnelInput) -> Result<(), String> {
         target_host,
         probe_url,
         auto_reconnect: input.auto_reconnect,
+        auto_start: input.auto_start,
         id: input.id.unwrap_or_else(models::new_id),
     })
 }
@@ -151,6 +160,42 @@ async fn open_in_browser(mgr: Mgr<'_>, id: String) -> Result<String, String> {
 #[tauri::command]
 fn tunnel_logs(mgr: Mgr, id: String) -> Vec<String> {
     mgr.logs(&id)
+}
+
+#[tauri::command]
+async fn set_system_proxy(mgr: Mgr<'_>, id: String, on: bool) -> Result<(), String> {
+    let mgr = Arc::clone(&mgr);
+    tauri::async_runtime::spawn_blocking(move || mgr.set_system_proxy(&id, on))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+// ---- launch at login ----------------------------------------------------------
+
+#[tauri::command]
+fn get_launch_at_login() -> bool {
+    autostart::is_enabled()
+}
+
+#[tauri::command]
+fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let result = autostart::set(enabled).map_err(|e| {
+        tr!(
+            "无法设置开机启动：{e}",
+            "Could not change launch at login: {e}"
+        )
+    });
+    sync_login_item(&app);
+    result
+}
+
+/// Show the actual login item state in the tray and the window.
+fn sync_login_item(app: &AppHandle) {
+    let enabled = autostart::is_enabled();
+    if let Some(menu) = app.try_state::<TrayMenu>() {
+        let _ = menu.login.set_checked(enabled);
+    }
+    let _ = app.emit(EVENT_LOGIN_ITEM, enabled);
 }
 
 // ---- ssh keys + config ----------------------------------------------------
@@ -352,7 +397,10 @@ fn show_main_window(app: &AppHandle) {
 }
 
 /// Tray menu entries, kept so their text can follow the language.
-struct TrayMenu([MenuItem<tauri::Wry>; 4]);
+struct TrayMenu {
+    items: [MenuItem<tauri::Wry>; 4],
+    login: CheckMenuItem<tauri::Wry>,
+}
 
 fn tray_labels() -> [String; 4] {
     [
@@ -363,11 +411,16 @@ fn tray_labels() -> [String; 4] {
     ]
 }
 
+fn login_label() -> String {
+    tr!("开机时启动", "Launch at login")
+}
+
 fn relabel_tray(app: &AppHandle) {
     if let Some(menu) = app.try_state::<TrayMenu>() {
-        for (item, label) in menu.0.iter().zip(tray_labels()) {
+        for (item, label) in menu.items.iter().zip(tray_labels()) {
             let _ = item.set_text(label);
         }
+        let _ = menu.login.set_text(login_label());
     }
     update_tray_tooltip(app, &app.state::<Arc<Manager>>());
 }
@@ -378,15 +431,25 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let start = MenuItem::with_id(app, "start_all", start, true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop_all", stop, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", quit, true, None::<&str>)?;
+    let login = CheckMenuItem::with_id(
+        app,
+        "login",
+        login_label(),
+        true,
+        autostart::is_enabled(),
+        None::<&str>,
+    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &sep1, &start, &stop, &sep2, &quit])?;
-    app.manage(TrayMenu([
-        show.clone(),
-        start.clone(),
-        stop.clone(),
-        quit.clone(),
-    ]));
+    let sep3 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &sep1, &start, &stop, &sep2, &login, &sep3, &quit],
+    )?;
+    app.manage(TrayMenu {
+        items: [show.clone(), start.clone(), stop.clone(), quit.clone()],
+        login: login.clone(),
+    });
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("ssh2socks")
@@ -398,6 +461,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 "show" => show_main_window(app),
                 "start_all" => mgr.start_all(),
                 "stop_all" => mgr.stop_all(),
+                "login" => {
+                    let _ = autostart::set(!autostart::is_enabled());
+                    sync_login_item(app);
+                }
                 "quit" => {
                     mgr.kill_all_now();
                     app.exit(0);
@@ -447,6 +514,11 @@ fn quit_on_signals(app: AppHandle) {
 
 fn main() {
     let app = tauri::Builder::default()
+        // Launching again (e.g. while it hides in the tray after login)
+        // shows the running copy instead of starting a second one.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .setup(|app| {
             #[cfg(unix)]
             {
@@ -456,8 +528,11 @@ fn main() {
                 }
                 quit_on_signals(app.handle().clone());
             }
+            // A system proxy left pointing at us by a crashed run.
+            sysproxy::recover();
+            autostart::refresh();
             let mgr = Manager::new(Some(app.handle().clone()), store::load());
-            app.manage(mgr);
+            app.manage(Arc::clone(&mgr));
             let prefs = i18n::load_prefs();
             if !prefs.lang.is_empty() {
                 i18n::set_english(prefs.lang == "en");
@@ -465,6 +540,12 @@ fn main() {
             let tray_ok = build_tray(app).is_ok();
             app.manage(TrayReady(tray_ok));
             apply_prefs(app.handle(), &prefs);
+            // Started by the login item: stay in the tray.
+            if !(tray_ok && autostart::started_hidden()) {
+                show_main_window(app.handle());
+            }
+            mgr.start_auto();
+            netwatch::spawn(mgr);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -489,6 +570,9 @@ fn main() {
             stop_all,
             tunnel_logs,
             open_in_browser,
+            set_system_proxy,
+            get_launch_at_login,
+            set_launch_at_login,
             list_keys,
             key_defaults,
             generate_key,

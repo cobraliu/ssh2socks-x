@@ -16,6 +16,12 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
 - New servers' host keys are trusted automatically on first connect (`StrictHostKeyChecking=accept-new`), so it never hangs on a yes/no prompt. A changed key for a known host is still refused, with a hint on how to fix it
 - Start or stop tunnels one at a time, or all at once
 - Reconnects automatically (exponential backoff from 1s to 30s), with `ServerAliveInterval` keepalives
+- Reconnects right away after the computer wakes from sleep or moves to another network (the local address changes), instead of waiting for keepalives to time out. When the network comes back after an outage, tunnels that are waiting to retry go at once; a connection that survived is left alone
+- **Autostart**: each tunnel can connect when the app starts, and "Launch at login" (top right, or the tray menu) starts the app in the tray when you log in. Only one copy runs: opening the app again shows the running window
+- **Use a SOCKS proxy** (the "Use…" button):
+  - Set it as the system proxy in one click. The current settings are saved first and put back when the tunnel stops, when the app quits, or on the next launch if it crashed. A setting someone else changed in the meantime is left as it is
+  - Windows: WinINet settings (`socks=127.0.0.1:<port>`, used by Edge, Chrome and most apps). macOS: the SOCKS proxy of every enabled network service (`networksetup`). Linux: GNOME-based desktops (`gsettings`)
+  - Copy ready-made settings for bash / zsh, PowerShell, cmd, git and curl (`socks5h://`, so host names are resolved on the server too)
 - Health check every 30 seconds:
   - SOCKS: fetches the probe URL through the proxy. An `http://` URL gets a full HTTP request; for `https://` a successful SOCKS CONNECT counts as up (no TLS handshake)
   - Local forward: checks whether a forwarded connection is dropped right away (which happens when the server can't reach the target)
@@ -78,7 +84,7 @@ Compatible with the old Python version. Stored at:
 - macOS: `~/Library/Application Support/ssh2socks/tunnels.json`
 - Windows: `%APPDATA%\ssh2socks\tunnels.json`
 
-Language and theme are saved in `settings.json` in the same folder.
+Language and theme are saved in `settings.json` in the same folder. While the system proxy points at a tunnel, the previous settings are kept in `sysproxy.json` there.
 
 ## Building
 

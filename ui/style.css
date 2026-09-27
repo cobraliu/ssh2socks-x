@@ -100,7 +100,9 @@ h1 { margin: 0; font-size: 16px; }
 .sub { margin: 0; font-size: 12px; color: var(--muted); }
 .actions { display: flex; gap: 8px; }
 .bar-end { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.prefs { display: flex; gap: 6px; }
+.prefs { display: flex; align-items: center; gap: 6px; }
+.login-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; margin-right: 4px; white-space: nowrap; }
+.login-item input { width: auto; margin: 0; }
 .prefs .btn { min-width: 34px; }
 
 /* ---- buttons ---- */
@@ -413,3 +415,21 @@ dialog .templates { margin-top: 6px; }
 .steps .mark.bad { color: var(--red); }
 .steps .detail { color: var(--muted); word-break: break-word; }
 .steps + .help { margin-top: 6px; }
+
+/* ---- using a proxy ---- */
+.tag.on { color: var(--green); border-color: currentColor; background: transparent; }
+.use-section { padding: 12px 0; border-top: 1px solid var(--border); }
+.use-section:first-of-type { border-top: 0; padding-top: 0; }
+.use-section .help { margin: 6px 0 0; }
+.use-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.snippets { display: grid; grid-template-columns: max-content 1fr auto; gap: 6px 10px; align-items: center; margin-top: 10px; }
+.snippet-label { font-size: 12px; color: var(--muted); }
+.snippet-code {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}

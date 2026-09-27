@@ -20,6 +20,8 @@ const EN = {
   "主题：跟随系统": "Theme: system",
   "主题：浅色": "Theme: light",
   "主题：深色": "Theme: dark",
+  "开机时启动": "Launch at login",
+  "登录系统后自动在托盘中启动": "Start in the tray when you log in",
 
   // tunnels view
   "状态": "Status",
@@ -35,6 +37,23 @@ const EN = {
   "已连接": "Connected",
   "错误": "Error",
   "打开": "Open",
+  "使用…": "Use…",
+  "设为系统代理，或复制终端里的代理设置": "Set as the system proxy, or copy proxy settings for a terminal",
+  "系统代理": "System proxy",
+  "系统代理当前指向此隧道": "The system proxy points at this tunnel",
+  "使用代理": "Use the proxy",
+  "使用「{name}」": "Use \"{name}\"",
+  "设为系统代理": "Set as system proxy",
+  "恢复原设置": "Restore previous settings",
+  "终端 / 命令行": "Terminal / command line",
+  "系统代理当前指向此隧道（SOCKS 127.0.0.1:{port}）。停止隧道或退出程序时会自动恢复原来的设置。": "The system proxy points at this tunnel (SOCKS 127.0.0.1:{port}). The previous settings come back when the tunnel stops or the app quits.",
+  "浏览器等跟随系统代理的程序会经过此隧道。原来的设置会被保存，停止隧道或退出程序时自动恢复。": "Browsers and other programs that follow the system proxy will go through this tunnel. The current settings are saved and come back when the tunnel stops or the app quits.",
+  "隧道连接后才能设为系统代理。": "Connect the tunnel to use it as the system proxy.",
+  "git 取消": "git (undo)",
+  "复制": "Copy",
+  "已复制到剪贴板": "Copied to the clipboard",
+  "已恢复原来的系统代理设置": "Restored the previous system proxy settings",
+  "已设为系统代理": "Set as the system proxy",
   "在浏览器中打开": "Open in browser",
   "已在浏览器打开 {url}": "Opened {url} in the browser",
   "编辑": "Edit",
@@ -69,6 +88,7 @@ const EN = {
   "127.0.0.1（或服务器所在局域网的 IP）": "127.0.0.1 (or an IP on the server's LAN)",
   "探测地址": "Probe URL",
   "进程退出时自动重连": "Reconnect automatically when ssh exits",
+  "启动本程序时自动连接": "Connect when the app starts",
   "在本机开一个 SOCKS5 代理，流量经服务器出去。":
     "Opens a SOCKS5 proxy on this machine; traffic leaves through the server.",
   "把服务器能访问到的端口（服务器本机或其局域网）映射到本机，用 127.0.0.1:本机端口 访问。":
@@ -186,6 +206,7 @@ const EN = {
 
 // Blocks with inline markup, translated as a whole (keyed by data-i18n-html).
 const EN_HTML = {
+  "socks5h": "<code>socks5h</code> resolves host names on the server too. Only programs started afterwards pick it up.",
   "empty-tunnels": "Click \"New tunnel\" at the top right and pick a host from <code>~/.ssh/config</code>.",
   "empty-host": "Or click \"Add\" to create one. The file is backed up to <code>config.ssh2socks.bak</code> before each save.",
   "empty-keys-title": "No public keys found (<code>~/.ssh/*.pub</code>)",

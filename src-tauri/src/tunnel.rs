@@ -23,7 +23,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::models::{ProbeResult, Tunnel, TunnelKind, TunnelState, TunnelView};
 use crate::progress::{self, Progress};
-use crate::{platform, probe, store};
+use crate::{platform, probe, store, sysproxy};
 
 const PORT_POLL: Duration = Duration::from_millis(300);
 const PORT_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
@@ -72,6 +72,44 @@ pub struct Manager {
     app: Option<AppHandle>,
     ssh_program: String,
     inner: Mutex<Inner>,
+    /// Bumped to make running tunnels reconnect right away.
+    kick: watch::Sender<(u64, Kick)>,
+}
+
+/// Why running tunnels should reconnect right away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kick {
+    /// The machine woke from sleep.
+    Wake,
+    /// This machine's address changed (another network).
+    NetworkChanged,
+    /// The network is back after an outage, on the same address.
+    NetworkBack,
+}
+
+impl Kick {
+    /// After a short outage on the same address a connected ssh may well
+    /// have survived, so only waiting / connecting tunnels are hurried.
+    fn restarts_connected(self) -> bool {
+        self != Kick::NetworkBack
+    }
+
+    fn message(self) -> String {
+        match self {
+            Kick::Wake => tr!(
+                "系统从睡眠中唤醒，立即重连",
+                "The system woke from sleep, reconnecting now"
+            ),
+            Kick::NetworkChanged => tr!(
+                "网络已变化，立即重连",
+                "The network changed, reconnecting now"
+            ),
+            Kick::NetworkBack => tr!(
+                "网络已恢复，立即重连",
+                "The network is back, reconnecting now"
+            ),
+        }
+    }
 }
 
 enum Event {
@@ -80,6 +118,7 @@ enum Event {
     Probe,
     Exited(std::io::Result<std::process::ExitStatus>),
     Stop,
+    Kick(Kick),
 }
 
 enum Outcome {
@@ -89,6 +128,8 @@ enum Outcome {
     Failed,
     /// Cannot work at all (ssh missing); do not retry.
     Fatal,
+    /// Restarted because of a [`Kick`]; reconnect without waiting.
+    Kicked,
 }
 
 pub fn ssh_args(t: &Tunnel) -> Vec<String> {
@@ -223,6 +264,20 @@ async fn wait_stop(rx: &mut watch::Receiver<bool>) {
     let _ = rx.wait_for(|stop| *stop).await;
 }
 
+/// The next kick that applies to a tunnel; never if `enabled` is false
+/// (auto-reconnect off).
+async fn wait_kick(rx: &mut watch::Receiver<(u64, Kick)>, enabled: bool, connected: bool) -> Kick {
+    loop {
+        if !enabled || rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        let why = rx.borrow_and_update().1;
+        if !connected || why.restarts_connected() {
+            return why;
+        }
+    }
+}
+
 impl Manager {
     pub fn new(app: Option<AppHandle>, tunnels: Vec<Tunnel>) -> Arc<Self> {
         Self::with_program(app, tunnels, "ssh")
@@ -237,6 +292,7 @@ impl Manager {
             app,
             ssh_program: ssh.to_string(),
             inner: Mutex::new(Inner { tunnels, runtimes }),
+            kick: watch::channel((0, Kick::Wake)).0,
         })
     }
 
@@ -392,6 +448,76 @@ impl Manager {
         }
     }
 
+    /// Start the tunnels marked to connect when the app starts.
+    pub fn start_auto(self: &Arc<Self>) {
+        let ids: Vec<String> = {
+            let inner = self.lock();
+            inner
+                .tunnels
+                .iter()
+                .filter(|t| t.auto_start)
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        for id in ids {
+            self.start(&id);
+        }
+    }
+
+    /// Make running tunnels (with auto-reconnect) reconnect now.
+    pub fn kick(&self, why: Kick) {
+        self.kick.send_modify(|k| *k = (k.0 + 1, why));
+    }
+
+    /// Point the system proxy at a running SOCKS tunnel, or put the
+    /// previous settings back. Blocking (runs system tools).
+    pub fn set_system_proxy(&self, id: &str, on: bool) -> Result<(), String> {
+        let previous = sysproxy::owner();
+        if on {
+            let port = {
+                let inner = self.lock();
+                let tunnel = inner.tunnels.iter().find(|t| t.id == id);
+                let active = inner.runtimes.get(id).is_some_and(|r| r.state.active());
+                match tunnel {
+                    Some(t) if t.kind != TunnelKind::Socks => {
+                        return Err(tr!(
+                            "只有 SOCKS 代理可以设为系统代理",
+                            "Only a SOCKS proxy can be the system proxy"
+                        ))
+                    }
+                    Some(t) if active => t.port,
+                    _ => return Err(tr!("请先连接该隧道", "Connect the tunnel first")),
+                }
+            };
+            sysproxy::enable(id, port)?;
+            self.log(
+                id,
+                &tr!(
+                    "已将系统代理设为 SOCKS 127.0.0.1:{port}（停止隧道或退出时恢复原设置）",
+                    "System proxy set to SOCKS 127.0.0.1:{port} (restored when the tunnel stops or the app quits)"
+                ),
+            );
+            // It may have stopped meanwhile, and nothing would undo it.
+            if !self
+                .lock()
+                .runtimes
+                .get(id)
+                .is_some_and(|r| r.state.active())
+                && sysproxy::release(id)
+            {
+                self.log(id, &restored_proxy());
+            }
+        } else if previous.as_deref() == Some(id) {
+            sysproxy::disable()?;
+            self.log(id, &restored_proxy());
+        }
+        if let Some(prev) = previous.filter(|p| p != id) {
+            self.emit_changed(&prev);
+        }
+        self.emit_changed(id);
+        Ok(())
+    }
+
     pub fn start_all(self: &Arc<Self>) {
         for id in self.ids() {
             self.start(&id);
@@ -415,6 +541,8 @@ impl Manager {
                 platform::terminate_pid(pid);
             }
         }
+        drop(inner);
+        let _ = sysproxy::disable();
     }
 
     fn ids(&self) -> Vec<String> {
@@ -424,10 +552,13 @@ impl Manager {
     // ---- supervisor -----------------------------------------------------
     async fn supervise(self: Arc<Self>, id: String, mut stop: watch::Receiver<bool>) {
         let mut attempts = 0u32;
+        let mut kick = self.kick.subscribe();
         loop {
             let Some(tunnel) = self.tunnel(&id) else {
                 return;
             };
+            // A kick from before this attempt is already taken care of.
+            kick.borrow_and_update();
             self.set_state(&id, TunnelState::Connecting);
             let outcome = if tunnel.kind.listens_locally() && !port_free(tunnel.port) {
                 self.note(
@@ -438,10 +569,12 @@ impl Manager {
                 );
                 Outcome::Failed
             } else {
-                self.run_once(&tunnel, &mut stop, &mut attempts).await
+                self.run_once(&tunnel, &mut stop, &mut kick, &mut attempts)
+                    .await
             };
             match outcome {
                 Outcome::Stopped => break,
+                Outcome::Kicked => attempts = 0,
                 Outcome::Fatal => {
                     self.finish(&id, TunnelState::Error);
                     return;
@@ -459,6 +592,10 @@ impl Manager {
                     );
                     tokio::select! {
                         _ = sleep(delay) => {}
+                        why = wait_kick(&mut kick, true, false) => {
+                            self.log(&id, &why.message());
+                            attempts = 0;
+                        }
                         _ = wait_stop(&mut stop) => break,
                     }
                 }
@@ -471,6 +608,7 @@ impl Manager {
         self: &Arc<Self>,
         tunnel: &Tunnel,
         stop: &mut watch::Receiver<bool>,
+        kick: &mut watch::Receiver<(u64, Kick)>,
         attempts: &mut u32,
     ) -> Outcome {
         let id = tunnel.id.as_str();
@@ -577,6 +715,7 @@ impl Manager {
                 _ = &mut ready => Event::Ready,
                 status = child.wait() => Event::Exited(status),
                 _ = wait_stop(stop) => Event::Stop,
+                why = wait_kick(kick, tunnel.auto_reconnect, false) => Event::Kick(why),
                 _ = sleep(WAIT_NOTICE) => Event::Tick,
             };
             if !matches!(event, Event::Tick) {
@@ -639,6 +778,7 @@ impl Manager {
                 return self.exited(id, status);
             }
             Event::Stop => return self.kill(id, child, tree).await,
+            Event::Kick(why) => return self.restart(id, why, child, tree).await,
             Event::Ready | Event::Probe | Event::Tick => {}
         }
 
@@ -653,11 +793,13 @@ impl Manager {
                 _ = ticker.tick() => Event::Probe,
                 status = child.wait() => Event::Exited(status),
                 _ = wait_stop(stop) => Event::Stop,
+                why = wait_kick(kick, tunnel.auto_reconnect, true) => Event::Kick(why),
             };
             match event {
                 Event::Probe | Event::Ready | Event::Tick => self.spawn_probe(tunnel),
                 Event::Exited(status) => return self.exited(id, status),
                 Event::Stop => return self.kill(id, child, tree).await,
+                Event::Kick(why) => return self.restart(id, why, child, tree).await,
             }
         }
     }
@@ -684,6 +826,18 @@ impl Manager {
         let _ = child.kill().await;
         self.set_pid(id, None);
         Outcome::Stopped
+    }
+
+    async fn restart(
+        &self,
+        id: &str,
+        why: Kick,
+        child: Child,
+        tree: platform::ProcTree,
+    ) -> Outcome {
+        self.log(id, &why.message());
+        self.kill(id, child, tree).await;
+        Outcome::Kicked
     }
 
     fn spawn_probe(self: &Arc<Self>, tunnel: &Tunnel) {
@@ -742,6 +896,9 @@ impl Manager {
             rt.stop = None;
             rt.pid = None;
         }
+        if sysproxy::release(id) {
+            self.log(id, &restored_proxy());
+        }
         self.set_state(id, state);
     }
 
@@ -771,7 +928,7 @@ impl Manager {
         self.emit_changed(id);
     }
 
-    fn emit_changed(&self, id: &str) {
+    pub fn emit_changed(&self, id: &str) {
         let view = {
             let inner = self.lock();
             inner
@@ -857,7 +1014,15 @@ fn view_of(inner: &Inner, t: &Tunnel) -> TunnelView {
         state: rt.map(|r| r.state).unwrap_or_default(),
         probe: rt.and_then(|r| r.probe.clone()),
         detail: rt.and_then(|r| r.detail.clone()),
+        system_proxy: sysproxy::owner().as_deref() == Some(t.id.as_str()),
     }
+}
+
+fn restored_proxy() -> String {
+    tr!(
+        "已恢复原来的系统代理设置",
+        "Restored the previous system proxy settings"
+    )
 }
 
 fn persist(tunnels: &[Tunnel]) -> Result<(), String> {
@@ -902,6 +1067,7 @@ mod tests {
             port: 1081,
             probe_url: String::new(),
             auto_reconnect: true,
+            auto_start: false,
             id: "x".into(),
         };
         let args = ssh_args(&t);
@@ -946,6 +1112,7 @@ mod tests {
             target_host: "127.0.0.1".into(),
             probe_url: String::new(),
             auto_reconnect: true,
+            auto_start: false,
             id: "a".into(),
         };
         let existing = [base.clone()];
@@ -1024,6 +1191,7 @@ mod tests {
             port,
             probe_url: "http://127.0.0.1/".into(),
             auto_reconnect: true,
+            auto_start: false,
             id: "e2e".into(),
         };
         let mgr = Manager::with_program(None, vec![tunnel], fake.to_str().unwrap());
@@ -1076,9 +1244,23 @@ mod tests {
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(state(), TunnelState::Connected);
         let third = pid().unwrap();
+
+        // Woke from sleep: reconnect at once, no backoff.
+        mgr.kick(Kick::Wake);
+        wait(TunnelState::Connecting, 5);
+        wait(TunnelState::Connected, 10);
+        assert!(logs().contains("系统从睡眠中唤醒，立即重连"));
+        let fourth = pid().unwrap();
+        assert_ne!(fourth, third);
+        assert!(!recorded(third));
+        // The network coming back leaves a working connection alone.
+        mgr.kick(Kick::NetworkBack);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!((state(), pid()), (TunnelState::Connected, Some(fourth)));
+
         mgr.stop("e2e");
         wait(TunnelState::Stopped, 5);
-        assert!(!recorded(second) && !recorded(third));
+        assert!(!recorded(second) && !recorded(third) && !recorded(fourth));
 
         // Helpers ssh started (like a ProxyJump `ssh -W`) die with it.
         let helpers = std::fs::read_to_string(dir.join("helpers")).unwrap();
@@ -1126,6 +1308,7 @@ mod tests {
             target_host: "127.0.0.1".into(),
             probe_url: String::new(),
             auto_reconnect: false,
+            auto_start: false,
             id: "r".into(),
         };
         let mgr = Manager::with_program(None, vec![remote], fake.to_str().unwrap());
@@ -1186,6 +1369,7 @@ mod tests {
                 .port(),
             probe_url: String::new(),
             auto_reconnect: false,
+            auto_start: false,
             id: "p".into(),
         };
         let mgr = Manager::with_program(None, vec![tunnel], fake.to_str().unwrap());

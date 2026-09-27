@@ -72,6 +72,7 @@ mod tests {
             port: 1080,
             probe_url: "http://x".into(),
             auto_reconnect: true,
+            auto_start: false,
             id: "1".into(),
         };
         save_to(&path, std::slice::from_ref(&t)).unwrap();

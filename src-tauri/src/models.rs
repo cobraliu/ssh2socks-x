@@ -63,6 +63,9 @@ pub struct Tunnel {
     pub probe_url: String,
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
+    /// Connect when the app starts.
+    #[serde(default)]
+    pub auto_start: bool,
     #[serde(default = "new_id")]
     pub id: String,
 }
@@ -99,6 +102,8 @@ pub struct TunnelView {
     pub probe: Option<ProbeResult>,
     /// Latest error / progress message worth showing next to the tunnel.
     pub detail: Option<String>,
+    /// The system proxy currently points at this tunnel.
+    pub system_proxy: bool,
 }
 
 #[cfg(test)]
@@ -120,6 +125,7 @@ mod tests {
         let t: Tunnel = serde_json::from_str(r#"{"name":"a","host":"h","port":1}"#).unwrap();
         assert_eq!(t.probe_url, DEFAULT_PROBE_URL);
         assert!(t.auto_reconnect);
+        assert!(!t.auto_start);
         assert_eq!(t.id.len(), 32);
         assert_eq!(t.kind, TunnelKind::Socks);
         assert_eq!(t.target_host, "127.0.0.1");
