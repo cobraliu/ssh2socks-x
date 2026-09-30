@@ -809,7 +809,7 @@ function fillHostForm(b) {
 
 function hostFormHeader(b) {
   $("host-form-title").textContent = b ? t("编辑主机 {name}", { name: b.patterns }) : t("新建主机");
-  $("host-form-where").textContent = b ? t("位于 {where}", { where: whereOf(b) }) : t("将添加到 ~/.ssh/config（放在 Host * 之前）");
+  $("host-form-where").textContent = b ? t("位于 {where}", { where: whereOf(b) }) : t("将添加到 ~/.ssh/config 末尾（末尾的 Host * 之前）");
 }
 
 function closeHostForm() {

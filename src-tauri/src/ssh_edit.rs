@@ -157,6 +157,38 @@ impl Doc {
             .unwrap_or_else(|| "    ".to_string())
     }
 
+    /// Whether line `i` starts a section that applies to every host:
+    /// `Host *` or `Match all`.
+    fn is_catch_all(&self, i: usize) -> bool {
+        let rest = split_keyword(self.lines[i].trim()).1;
+        match self.keyword(i).as_str() {
+            "host" => rest == "*",
+            "match" => rest.eq_ignore_ascii_case("all"),
+            _ => false,
+        }
+    }
+
+    /// Where a new Host block goes: the end of the file, but before
+    /// trailing `Host *` / `Match all` sections (and the comments right
+    /// above them). ssh takes the first value it sees, so a host placed
+    /// after `Host *` would lose every option `Host *` also sets.
+    fn append_point(&self) -> usize {
+        let headers: Vec<usize> = (0..self.lines.len())
+            .filter(|&i| matches!(self.keyword(i).as_str(), "host" | "match"))
+            .collect();
+        let mut at = self.lines.len();
+        for &i in headers.iter().rev() {
+            if !self.is_catch_all(i) {
+                break;
+            }
+            at = i;
+        }
+        while at > 0 && at < self.lines.len() && self.lines[at - 1].trim_start().starts_with('#') {
+            at -= 1;
+        }
+        at
+    }
+
     fn block_at(&self, line: usize) -> Option<(usize, usize)> {
         self.blocks().into_iter().find(|(s, _)| *s == line)
     }
@@ -401,18 +433,7 @@ pub fn save_block(config: &Path, input: &HostInput) -> Result<HostBlock, String>
             let mut doc = Doc::read(config)?;
             let mut block = vec![format!("Host {patterns}")];
             apply(&mut block, input, &doc.option_indent());
-            // ssh takes the first value it sees, so a new host must come
-            // before catch-all sections (`Host *`, `Match`) to take effect.
-            let at = (0..doc.lines.len())
-                .find(|&i| match doc.keyword(i).as_str() {
-                    "match" => true,
-                    "host" => split_keyword(doc.lines[i].trim())
-                        .1
-                        .split_whitespace()
-                        .any(|p| p.contains(['*', '?'])),
-                    _ => false,
-                })
-                .unwrap_or(doc.lines.len());
+            let at = doc.append_point();
             let gap_before = at > 0 && !doc.lines[at - 1].trim().is_empty();
             let host_line = at + usize::from(gap_before);
             let mut insert = Vec::new();
@@ -431,6 +452,81 @@ pub fn save_block(config: &Path, input: &HostInput) -> Result<HostBlock, String>
             Ok(block_view(&doc, config, range))
         }
     }
+}
+
+/// What [`ensure_accept_new`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AcceptNew {
+    /// Already `StrictHostKeyChecking accept-new` for all hosts.
+    Present,
+    /// Added, or changed from `ask` (ssh's default).
+    Added,
+    /// Set to something else on purpose (`yes`, `no`, …); left alone.
+    Other(String),
+}
+
+/// Make `StrictHostKeyChecking accept-new` the setting for every host in the
+/// main config, so ssh started by ProxyJump / ProxyCommand (which never sees
+/// our command-line options) records a new jump host's key instead of
+/// waiting at the yes/no prompt. A *changed* key is still refused.
+///
+/// Looks at the top of the file and every `Host *` / `Match all` section:
+/// the first value there wins. None → added under the first `Host *`
+/// (a new `Host *` section at the end if there is none); `ask` → changed;
+/// any other value is the user's choice and is kept.
+pub fn ensure_accept_new(config: &Path) -> Result<AcceptNew, String> {
+    const KEY: &str = "StrictHostKeyChecking";
+    let mut doc = Doc::read(config)?;
+    let mut global = true;
+    let mut first_catch_all = None;
+    let mut found = None;
+    for i in 0..doc.lines.len() {
+        match doc.keyword(i).as_str() {
+            "host" | "match" => {
+                global = doc.is_catch_all(i);
+                if global && doc.keyword(i) == "host" && first_catch_all.is_none() {
+                    first_catch_all = Some(i);
+                }
+            }
+            "stricthostkeychecking" if global && found.is_none() => found = Some(i),
+            _ => {}
+        }
+    }
+    match found {
+        Some(i) => {
+            let value = unquote(&split_keyword(doc.lines[i].trim()).1);
+            if value.eq_ignore_ascii_case("accept-new") {
+                return Ok(AcceptNew::Present);
+            }
+            if !value.eq_ignore_ascii_case("ask") {
+                return Ok(AcceptNew::Other(value));
+            }
+            let line = &doc.lines[i];
+            let lead = &line[..line.len() - line.trim_start().len()];
+            doc.lines[i] = format!("{lead}{KEY} accept-new");
+        }
+        None => match first_catch_all {
+            Some(h) => {
+                let indent = doc.lines[h + 1..]
+                    .iter()
+                    .take_while(|l| !matches!(split_keyword(l.trim()).0.as_str(), "host" | "match"))
+                    .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+                    .map(|l| l[..l.len() - l.trim_start().len()].to_string())
+                    .unwrap_or_else(|| doc.option_indent());
+                doc.lines.insert(h + 1, format!("{indent}{KEY} accept-new"));
+            }
+            None => {
+                let indent = doc.option_indent();
+                if doc.lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                    doc.lines.push(String::new());
+                }
+                doc.lines.push("Host *".into());
+                doc.lines.push(format!("{indent}{KEY} accept-new"));
+            }
+        },
+    }
+    write(config, &doc)?;
+    Ok(AcceptNew::Added)
 }
 
 pub fn delete_block(file: &str, line: usize, patterns: &str) -> Result<(), String> {
@@ -634,6 +730,75 @@ Host *\r\n\
             ..input("x")
         };
         assert!(save_block(&cfg, &both).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn add_goes_to_the_end_past_other_wildcards() {
+        let dir = tmp();
+        let cfg = dir.join("config");
+        fs::write(
+            &cfg,
+            "Host *.corp\n  User me\n\nMatch host x\n  Port 2\n\nHost a\n  Port 1\n\n# defaults\nHost *\n  Compression yes\n",
+        )
+        .unwrap();
+        save_block(&cfg, &input("b")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            "Host *.corp\n  User me\n\nMatch host x\n  Port 2\n\nHost a\n  Port 1\n\nHost b\n\n# defaults\nHost *\n  Compression yes\n"
+        );
+        fs::write(&cfg, "Host a\n  Port 1\n").unwrap();
+        save_block(&cfg, &input("b")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            "Host a\n  Port 1\n\nHost b\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ensures_accept_new() {
+        let dir = tmp();
+        let cfg = dir.join("config");
+        let run = |text: &str| {
+            fs::write(&cfg, text).unwrap();
+            let r = ensure_accept_new(&cfg).unwrap();
+            (r, fs::read_to_string(&cfg).unwrap())
+        };
+        assert_eq!(
+            run("Host a\n  Port 1\n"),
+            (
+                AcceptNew::Added,
+                "Host a\n  Port 1\n\nHost *\n  StrictHostKeyChecking accept-new\n".into()
+            )
+        );
+        assert_eq!(
+            run("Host a\n  Port 1\n\nHost *\n\tCompression yes\n"),
+            (
+                AcceptNew::Added,
+                "Host a\n  Port 1\n\nHost *\n\tStrictHostKeyChecking accept-new\n\tCompression yes\n".into()
+            )
+        );
+        assert_eq!(
+            run("Host *\n  StrictHostKeyChecking ask\n").1,
+            "Host *\n  StrictHostKeyChecking accept-new\n"
+        );
+        let kept = "StrictHostKeyChecking=yes\nHost *\n  User me\n";
+        assert_eq!(run(kept), (AcceptNew::Other("yes".into()), kept.into()));
+        let present =
+            "Host a\n  StrictHostKeyChecking no\nHost *\n  StrictHostKeyChecking accept-new\n";
+        assert_eq!(run(present), (AcceptNew::Present, present.into()));
+        // A setting for one host doesn't count.
+        assert_eq!(
+            run("Host a\n  StrictHostKeyChecking no\n").1,
+            "Host a\n  StrictHostKeyChecking no\n\nHost *\n  StrictHostKeyChecking accept-new\n"
+        );
+        fs::remove_file(&cfg).unwrap();
+        assert_eq!(ensure_accept_new(&cfg).unwrap(), AcceptNew::Added);
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            "Host *\n    StrictHostKeyChecking accept-new\n"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

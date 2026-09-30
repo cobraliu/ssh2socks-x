@@ -14,6 +14,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
   - **Remote forward**: publishes a local port on the server's `0.0.0.0:<port>` so others can reach it
   - Both forward types have an "Open" button that opens the http address in your browser
 - New servers' host keys are trusted automatically on first connect (`StrictHostKeyChecking=accept-new`), so it never hangs on a yes/no prompt. A changed key for a known host is still refused, with a hint on how to fix it
+- Jump hosts too: options on the command line don't reach the ssh started by ProxyJump / ProxyCommand, so before connecting the app looks each jump host up in known_hosts and, if it is new, connects to it once with accept-new to record its key. At startup it also adds `StrictHostKeyChecking accept-new` under `Host *` in `~/.ssh/config` (a new `Host *` section at the end if there is none). An existing value other than `ask` (e.g. `yes` or `no`) is left alone
 - Start or stop tunnels one at a time, or all at once
 - Reconnects automatically (exponential backoff from 1s to 30s), with `ServerAliveInterval` keepalives
 - Reconnects right away after the computer wakes from sleep or moves to another network (the local address changes), instead of waiting for keepalives to time out. When the network comes back after an outage, tunnels that are waiting to retry go at once; a connection that survived is left alone
@@ -32,7 +33,7 @@ Written in Rust with Tauri v2. Installers and binaries are a few MB. Runs on Win
   - View, add, edit and delete hosts in `~/.ssh/config` (alias, hostname, user, port, identity file)
   - Connect directly, through a jump host (`ProxyJump`), or with a `ProxyCommand`. Templates cover a jump host, a SOCKS5 proxy, an HTTP proxy and ncat
   - Only the edited host's fields are changed. Comments, other options, `Include`/`Match` blocks and line endings are left as they are. The file is backed up to `config.ssh2socks.bak` before each save
-  - New hosts are inserted before `Host *` / `Match` so they take effect
+  - New hosts are added at the end of the file, just before a trailing `Host *` / `Match all` section (ssh uses the first value it finds, so a host placed after `Host *` would lose the options `Host *` also sets)
   - "Test connection" checks that key-based login works. The config file can also be opened in your system editor
 - **Key management** ("Keys" tab):
   - Lists `~/.ssh/*.pub` with type, SHA256 fingerprint and comment. View or copy a public key in one click

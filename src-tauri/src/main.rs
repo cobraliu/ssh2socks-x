@@ -4,6 +4,7 @@
 #[macro_use]
 mod i18n;
 mod autostart;
+mod jumps;
 mod keygen;
 mod keys;
 mod models;
@@ -295,6 +296,18 @@ struct TestResult {
 /// Log in once (no command, no tty) to check the host, keys and proxy setup.
 #[tauri::command]
 async fn test_ssh_host(alias: String) -> TestResult {
+    let notes = std::sync::Mutex::new(Vec::new());
+    let log = |line: String| notes.lock().unwrap_or_else(|e| e.into_inner()).push(line);
+    jumps::trust("ssh", &alias, &log).await;
+    let notes = notes.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut result = login_once(&alias).await;
+    if !notes.is_empty() {
+        result.output = format!("{}\n{}", notes.join("\n"), result.output);
+    }
+    result
+}
+
+async fn login_once(alias: &str) -> TestResult {
     let mut cmd = tokio::process::Command::new("ssh");
     cmd.args([
         "-T",
@@ -304,7 +317,7 @@ async fn test_ssh_host(alias: String) -> TestResult {
         "ConnectTimeout=10",
         "-o",
         "StrictHostKeyChecking=accept-new",
-        &alias,
+        alias,
         "exit",
     ])
     .stdin(std::process::Stdio::null())
@@ -531,6 +544,17 @@ fn main() {
             // A system proxy left pointing at us by a crashed run.
             sysproxy::recover();
             autostart::refresh();
+            // Jump hosts only see ssh_config, not our command-line options.
+            if let Some(config) = ssh_edit::main_config() {
+                match ssh_edit::ensure_accept_new(&config) {
+                    Ok(ssh_edit::AcceptNew::Other(v)) => eprintln!(
+                        "ssh2socks: keeping StrictHostKeyChecking {v} in {}",
+                        config.display()
+                    ),
+                    Err(e) => eprintln!("ssh2socks: {e}"),
+                    Ok(_) => {}
+                }
+            }
             let mgr = Manager::new(Some(app.handle().clone()), store::load());
             app.manage(Arc::clone(&mgr));
             let prefs = i18n::load_prefs();

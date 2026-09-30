@@ -206,6 +206,10 @@ pub fn describe(t: &Tunnel) -> String {
 fn hint_for(line: &str) -> Option<String> {
     if line.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
         Some(tr!("提示：服务器主机密钥与 known_hosts 中的记录不一致（服务器重装过，或存在中间人攻击）。确认安全后执行 ssh-keygen -R <主机地址> 删除旧记录再重试。", "Hint: the server's host key does not match the one in known_hosts (the server was reinstalled, or someone is intercepting). Once you are sure it is safe, run ssh-keygen -R <host> to remove the old entry and try again."))
+    } else if line.contains("The authenticity of host")
+        || line.contains("Host key verification failed")
+    {
+        Some(tr!("提示：跳板机（ProxyJump / ProxyCommand）的主机密钥未能自动记录。请在终端里执行一次 ssh <跳板机> 并确认密钥，或在 ~/.ssh/config 的 Host * 下加上 StrictHostKeyChecking accept-new。", "Hint: the host key of a jump host (ProxyJump / ProxyCommand) could not be recorded automatically. Run ssh <jump host> once in a terminal and accept the key, or add StrictHostKeyChecking accept-new under Host * in ~/.ssh/config."))
     } else if line.contains("Permission denied (publickey") {
         Some(tr!("提示：需要配置密钥免密登录（例如 ssh-copy-id），本程序无法输入密码。", "Hint: set up key-based login (for example with ssh-copy-id); this app can't enter passwords."))
     } else if line.contains("remote port forwarding failed") {
@@ -628,6 +632,16 @@ impl Manager {
                     ),
                 );
             }
+        }
+        // Jump hosts don't get our accept-new; record new ones first.
+        let log = {
+            let me = Arc::clone(self);
+            let id = id.to_string();
+            move |line: String| me.log(&id, &line)
+        };
+        tokio::select! {
+            () = crate::jumps::trust(&self.ssh_program, &tunnel.host, &log) => {}
+            () = wait_stop(stop) => return Outcome::Stopped,
         }
         let args = ssh_args(tunnel);
         let mut cmd = Command::new(&self.ssh_program);

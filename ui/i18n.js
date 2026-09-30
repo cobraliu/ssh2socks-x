@@ -112,7 +112,7 @@ const EN = {
   "新建主机": "New host",
   "编辑主机 {name}": "Edit host {name}",
   "位于 {where}": "In {where}",
-  "将添加到 ~/.ssh/config（放在 Host * 之前）": "Will be added to ~/.ssh/config (before Host *)",
+  "将添加到 ~/.ssh/config 末尾（末尾的 Host * 之前）": "Will be added at the end of ~/.ssh/config (before a trailing Host *)",
   "~/.ssh/{file} 第 {line} 行": "~/.ssh/{file}, line {line}",
   "别名 Host": "Alias (Host)",
   "例如 web，多个别名用空格分隔": "e.g. web; separate several aliases with spaces",
